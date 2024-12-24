@@ -1,4 +1,4 @@
-### context-resolver
+## context-resolver
 
 A type-safe, async-first context resolution library for IoC/DI and lifecycle management.
 
