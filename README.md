@@ -16,8 +16,7 @@ const db = $db()
 #### Caching
 ```ts
 const cachedUser = $user(ctx.user.id, {
-    ttl: 5_000,
-    disposer: u => disposeUserRelatedStructures(u.id) 
+    ttl: 5_000
 })
 ```
 #### Reusability
