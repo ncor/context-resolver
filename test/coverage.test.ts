@@ -271,6 +271,23 @@ describe("many providers", () => {
             expect(timer2).not.toBe(undefined);
         });
 
+        it("should dispose", async () => {
+            let dispositionCount = 0;
+
+            const $a = provide("a")
+                .by(() => "a")
+                .withDisposer(() => dispositionCount++);
+            const $b = provide("b")
+                .by(() => "b")
+                .withDisposer(() => dispositionCount++);
+
+            const $all = group($a, $b);
+            await $all("key");
+            await $all.dispose();
+
+            expect(dispositionCount).toBe(2);
+        });
+
         it("should isolate", async () => {
             const $a = provide("a").by(() => "a");
             const $b = provide("b")

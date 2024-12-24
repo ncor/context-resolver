@@ -121,7 +121,7 @@ type Provider<
      * // one instance is disposed
      * ```
      *
-     * @param cacheKey Optional key to dispose of a specific instance. Disposes all instances if not provided.
+     * @param cacheKey Optional key to dispose an instance by its cache key. Disposes all instances if not provided.
      */
     dispose(cacheKey?: string): Promise<void>;
     /**
@@ -500,6 +500,12 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
         cacheKey?: string,
         cacheOpts?: UnrelatedCachingOpts,
     ): Promise<MapProvidersInstancesById<Providers>>;
+    /**
+     * Disposes cached instances of all providers in the group.
+     *
+     * @param cacheKey Optional key to dispose instances by a common cache key. Disposes all instances if not provided.
+     */
+    dispose(cacheKey?: string): Promise<void>;
     list: Providers;
     /**
      * A map of provider IDs to their respective providers.
@@ -593,6 +599,10 @@ const createGroup = <Providers extends ProviderShape[]>(
             ),
         );
 
+    const dispose: GroupType["dispose"] = async (cacheKey) => {
+        await Promise.all(list.map((p) => p.dispose(cacheKey)));
+    };
+
     const add: GroupType["add"] = (...providers) =>
         createGroup(...list, ...providers);
 
@@ -623,6 +633,7 @@ const createGroup = <Providers extends ProviderShape[]>(
     const instanceCallable = build;
 
     const instanceWithoutCallable: OmitCallSignature<GroupType> = {
+        dispose,
         list,
         get map() {
             return map as Prettify<MapProvidersById<Providers>>;
