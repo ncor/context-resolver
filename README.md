@@ -31,11 +31,11 @@ const $userRepository = providesRepository
 #### Isolation (scopes)
 ```ts
 const $services = group(
-        userService,
-        authService
-    )
-    .add(imageService)
-    .concat(group(messageService))
+    userService,
+    authService,
+    imageService,
+    messageService
+)
 
 app.use(async (ctx, next) => {
     const $requestScope = $services.isolate()
