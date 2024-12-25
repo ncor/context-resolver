@@ -1,4 +1,4 @@
-import { group, provide } from "../src";
+import { group, mono, provide } from "../src";
 import { describe, expect, it, vi } from "vitest";
 
 describe("single provider", () => {
@@ -239,6 +239,17 @@ describe("many providers", () => {
             expect($all.map).toStrictEqual({
                 a: $a,
                 b: $b,
+            });
+        });
+
+        it("should create as mono", () => {
+            const $a = provide("a").by(() => "a");
+            const $all = mono($a);
+
+            expect($all).not.toBe(undefined);
+            expect($all.list).toStrictEqual([$a]);
+            expect($all.map).toStrictEqual({
+                a: $a,
             });
         });
 
