@@ -976,4 +976,7 @@ const createGroup = <Providers extends ProviderShape[]>(
 };
 
 export const group = createGroup;
-export const mono = createGroup;
+
+export const mono = <ProviderType extends ProviderShape>(
+    provider: ProviderType,
+) => createGroup(provider);
