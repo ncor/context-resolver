@@ -73,6 +73,19 @@ type Provider<
      * a cached instance under the key, it will be disposed
      * and replaced with a new one.
      *
+     * ```ts
+     * const otherProvider = provide("otherService").by(() => () => "other");
+     * const provider = provide("someService")
+     *  .using(otherProvider)
+     *  .by((container) => () => `some ${container.otherService} service`);
+     *
+     * const instance = await provider.complete(
+     *  { otherService: "predefined" },
+     *   "unique"
+     * );
+     * // instance === "some predefined service"
+     * ```
+     *
      * @param resolvedPart Already resolved part of dependencies.
      * @param cacheKey Optional key for caching.
      * @param cacheOpts Optional caching options.
@@ -87,6 +100,15 @@ type Provider<
      * If there is already a cached instance under the key,
      * it will be disposed and replaced with a new one.
      *
+     * ```ts
+     * const provider = provide("someService").by(() => () => "some");
+     *
+     * const instance = await provider.mount(
+     *  "predefined",
+     *  "unique"
+     * );
+     * ```
+     *
      * @param instance An instance to cache.
      * @param cacheKey A key under which the instance will be cached.
      * @param cacheOpts Optional caching options.
@@ -98,15 +120,27 @@ type Provider<
     ): Promise<Instance>;
     /**
      * Unique identifier of the provider.
+     * ```ts
+     * const provider = provide("someService");
+     * provider.id; // "someService"
+     * ```
      */
     id: Id;
     /**
      * A list of dependency providers.
+     * ```ts
+     * const provider = provide("someService").using(otherProvider)
+     * provider.dependencies[0].id; // "otherService"
+     * ```
      */
     dependencies: Dependencies;
     /**
      * Creates a new provider with a new identifier.
-     *
+     * ```ts
+     * const provider = provide("someService").by(() => () => "some");
+     * const aliased = provider.as("newService");
+     * aliased.id; // "newService"
+     * ```
      * @param id A unique identifier for the provider.
      */
     as<NewId extends string>(
@@ -131,7 +165,12 @@ type Provider<
     dispose(cacheKey?: string): Promise<void>;
     /**
      * Creates a new provider with a new resolver.
-     *
+     * ```ts
+     * const provider = provide("someService").by(() => () => "some");
+     * const providerWithNewResolver = provider.by(() => () => "new");
+     * const instance = await providerWithNewResolver();
+     * instance; // "new"
+     * ```
      * @resolver A function that creates an instance.
      */
     by<NewInstance>(
@@ -142,7 +181,11 @@ type Provider<
     ): Provider<NewInstance, Id, Dependencies>;
     /**
      * Creates a new provider with a specified list of dependencies.
-     *
+     * ```ts
+     * const otherProvider = provide("otherService");
+     * const provider = provide("someService").using(otherProvider);
+     * provider.dependencies[0].id; // "otherService"
+     * ```
      * @param dependencies A list of dependency providers.
      */
     using<NewDependencies extends ProviderShape[]>(
@@ -150,7 +193,12 @@ type Provider<
     ): Provider<Instance, Id, NewDependencies>;
     /**
      * Creates a new provider with a default disposer for all cached instances.
-     *
+     * ```ts
+     * const provider = provide("someService").by(() => () => "some")
+     *  .withDisposer(handleDisposition);
+     * await provider("unique");
+     * await provider.dispose("unique");
+     * ```
      * @param disposer Function called upon disposition.
      */
     withDisposer(
@@ -158,22 +206,47 @@ type Provider<
     ): Provider<Instance, Id, Dependencies>;
     /**
      * Creates a new provider with a default cache key for all resolutions.
+     * ```ts
+     * const provider = provide("someService").by(() => () => "some").persisted();
+     * await provider();
+     * await provider(); // returns the same cached instance
+     * const instance = await provider("unique"); // returns a new instance with provided cache key
+     * ```
      *
+     * ```ts
+     * const provider = provide("someService").by(() => () => "some").persisted("main");
+     * await provider(); // cached under "main" key
+     * await provider("unique"); // cached under "unique" key
+     * ```
      * @param cacheKey Cache key. Defaults to `"singleton"` if not specified.
      */
     persisted(cacheKey?: string): Provider<Instance, Id, Dependencies>;
     /**
      * Creates a new provider with a default time-to-live for all resolutions.
-     *
+     * ```ts
+     * const provider = provide("someService").by(() => () => "some").temporary(1000);
+     * await provider(); // cached for 1 second
+     * ```
      * @param Time-to-live in milliseconds.
      */
     temporary(ttl: number): Provider<Instance, Id, Dependencies>;
     /**
      * Creates a new provider with the same properties as the original.
+     * ```ts
+     * const provider = provide("someService").by(() => () => "some");
+     * const cloned = provider.clone();
+     * cloned.id; // "someService"
+     * ```
      */
     clone(): Provider<Instance, Id, Dependencies>;
     /**
      * Returns information for debugging.
+     * ```ts
+     * const provider = provide("someService").by(() => () => "some");
+     * await provider("unique");
+     * const debugInfo = provider.inspect();
+     * debugInfo.cache.map.has("unique"); // true
+     * ```
      */
     inspect(): {
         cache: ResolutionCache<Instance>;
@@ -182,7 +255,19 @@ type Provider<
      * Сreates a new provider with existing dependency providers
      * replaced by mock providers. Replacement is determined
      * by a unique identifiers.
+     * ```ts
+     * const otherProvider = provide("otherService")
+     *  .by(() => () => "other");
+     * const mockOtherProvider = provide("otherService")
+     *  .by(() => () => "mocked");
+     * const provider = provide("someService")
+     *  .using(otherProvider)
+     *  .by((container) => () => `some ${container.otherService} service`);
      *
+     * const mockedProvider = provider.mock(mockOtherProvider);
+     * const instance = await mockedProvider()
+     * instance; // "some mocked service"
+     * ```
      * @param providers A list of mock dependency providers.
      */
     mock(
@@ -192,7 +277,19 @@ type Provider<
      * Сreates a new provider with existing dependency provider
      * replaced by a mock provider. Replacement is determined
      * by a unique identifiers.
+     * ```ts
+     * const otherProvider = provide("otherService")
+     *  .by(() => () => "other");
+     * const mockOtherProvider = provide("otherService")
+     *  .by(() => () => "mocked");
+     * const provider = provide("someService")
+     *  .using(otherProvider)
+     *  .by((container) => () => `some ${container.otherService} service`);
      *
+     * const mockedProvider = provider.mockByIds({otherService: mockOtherProvider});
+     * const instance = await mockedProvider()
+     * instance; // "some mocked service"
+     * ```
      * @param map A map of mock dependency providers by their ids.
      */
     mockByIds(
@@ -202,7 +299,20 @@ type Provider<
      * Сreates a new provider with existing dependency provider
      * replaced by a mock provider. Replacement is determined
      * by an instance of existing dependency provider.
+     * ```ts
+     * const otherProvider = provide("otherService")
+     *  .by(() => () => "other");
+     * const mockOtherProvider = provide("otherService")
+     *  .by(() => () => "mocked");
+     * const provider = provide("someService")
+     *  .using(otherProvider)
+     *  .by((container) => () => `some ${container.otherService} service`);
      *
+     * const mockedProvider = provider
+     *  .mockByReference(otherProvider, mockOtherProvider);
+     * const instance = await mockedProvider()
+     * instance; // "some mocked service"
+     * ```
      * @param providerInstance An instance of existing dependency provider.
      * @param mockProvider A mock provider for the specified one.
      */
@@ -575,22 +685,53 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
     ): Promise<MapProvidersOutputsById<Providers>>;
     /**
      * Disposes cached instances of all providers in the group.
-     *
+     * ```ts
+     * const first = provide("first").by(() => () => 1);
+     * const second = provide("second").by(() => () => 2);
+     * const providerGroup = group(first, second);
+     * await providerGroup("cacheKey");
+     * await providerGroup.dispose("cacheKey"); // dispose all instances under cacheKey
+     * await providerGroup("cacheKey");
+     * await providerGroup.dispose(); // dispose all instances
+     * ```
      * @param cacheKey Optional key to dispose instances by a common cache key.
      * Disposes all instances if not provided.
      */
     dispose(cacheKey?: string): Promise<void>;
     /**
      * A list of grouped providers.
+     * ```ts
+     * const first = provide("first").by(() => () => 1);
+     * const second = provide("second").by(() => () => 2);
+     * const providerGroup = group(first, second);
+     * providerGroup.list[0].id; // "first"
+     * ```
      */
     list: Providers;
     /**
      * A map of provider IDs to their respective providers.
+     * ```ts
+     * const first = provide("first").by(() => () => 1);
+     * const second = provide("second").by(() => () => 2);
+     * const providerGroup = group(first, second);
+     * providerGroup.map.first.id; // "first"
+     * providerGroup.map.second.id; // "second"
+     * ```
      */
     map: Prettify<MapProvidersById<Providers>>;
     /**
      * Creates a new group by adding providers to the current group.
-     *
+     * ```ts
+     * const first = provide("first").by(() => () => 1);
+     * const second = provide("second").by(() => () => 2);
+     * const third = provide("third").by(() => () => 3);
+     * const providerGroup = group(first, second);
+     * const extendedGroup = providerGroup.add(third);
+     * extendedGroup.list.length; // 3
+     * extendedGroup.map.first.id; // "first"
+     * extendedGroup.map.second.id; // "second"
+     * extendedGroup.map.third.id; // "third"
+     * ```
      * @param providers A list of providers to add.
      */
     add<AddedProviders extends ProviderShape[]>(
@@ -598,7 +739,20 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
     ): ProviderGroup<[...Providers, ...AddedProviders]>;
     /**
      * Creates a new group by merging another group into the current one.
-     *
+     * ```ts
+     * const first = provide("first").by(() => () => 1);
+     * const second = provide("second").by(() => () => 2);
+     * const third = provide("third").by(() => () => 3);
+     * const anotherFirst = provide("anotherFirst").by(() => () => 4);
+     * const providerGroup = group(first, second);
+     * const anotherGroup = group(third, anotherFirst);
+     * const extendedGroup = providerGroup.concat(anotherGroup);
+     * extendedGroup.list.length; // 4
+     * extendedGroup.map.first.id; // "first"
+     * extendedGroup.map.second.id; // "second"
+     * extendedGroup.map.third.id; // "third"
+     * extendedGroup.map.anotherFirst.id; // "anotherFirst"
+     * ```
      * @param group A group to be concatenated.
      */
     concat<OtherProviders extends ProviderShape[]>(
@@ -607,7 +761,10 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
     /**
      * Creates a new group containing isolated copies of the entire dependency graph.
      * ```ts
-     * const requestScope = group.isolate();
+     * const first = provide("first").by(() => () => 1);
+     * const second = provide("second").by(() => () => 2);
+     * const providerGroup = group(first, second);
+     * const requestScope = providerGroup.isolate();
      * // Operations on the new group won't affect the original.
      * ```
      */
@@ -615,9 +772,12 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
     /**
      * Creates a copy of only one branch, isolating one provider.
      * ```ts
-     * const someProvider = group.isolateOne(g => g.someProvider);
+     * const first = provide("first").by(() => () => 1);
+     * const second = provide("second").by(() => () => 2);
+     * const providerGroup = group(first, second);
+     * const someProvider = providerGroup.isolateOne(g => g.first);
+     * someProvider.id; // "first"
      * ```
-     *
      * @param selector A function that picks a local provider.
      */
     isolateOne<OneProvider extends Providers[number]>(
@@ -626,9 +786,15 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
     /**
      * Creates a new group with isolated copies of specified providers.
      * ```ts
-     * const subgroup = group.isolateSome(g => [g.first, g.second]);
+     * const first = provide("first").by(() => () => 1);
+     * const second = provide("second").by(() => () => 2);
+     * const third = provide("third").by(() => () => 3);
+     * const providerGroup = group(first, second, third);
+     * const subgroup = providerGroup.isolateSome(g => [g.first, g.second]);
+     * subgroup.list.length; // 2
+     * subgroup.map.first.id; // "first"
+     * subgroup.map.second.id; // "second"
      * ```
-     *
      * @param selector A function that picks local providers.
      */
     isolateSome<SomeProviders extends SomeOf<Providers>>(
@@ -637,7 +803,16 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
     /**
      * Replaces existing providers in the available graph with their mock versions
      * and returns a new group of the same type.
-     *
+     * ```ts
+     * const first = provide("first").by(() => () => 1);
+     * const second = provide("second").by(() => () => 2);
+     * const mockSecond = provide("second").by(() => () => "mocked");
+     * const providerGroup = group(first, second);
+     * const mockedGroup = providerGroup.mock(mockSecond);
+     * const instanceMap = await mockedGroup();
+     * instanceMap.first; // 1
+     * instanceMap.second; // "mocked"
+     * ```
      * @param providers A list of mock dependency providers.
      */
     mock(...providers: SomeOf<Providers>): ProviderGroup<Providers>;
@@ -651,7 +826,16 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
     /**
      * Replaces existing providers in the available graph with their mock versions
      * and returns a new group of the same type.
-     *
+     * ```ts
+     * const first = provide("first").by(() => () => 1);
+     * const second = provide("second").by(() => () => 2);
+     * const mockSecond = provide("second").by(() => () => "mocked");
+     * const providerGroup = group(first, second);
+     * const mockedGroup = providerGroup.mockByIds({ second: mockSecond });
+     * const instanceMap = await mockedGroup();
+     * instanceMap.first; // 1
+     * instanceMap.second; // "mocked"
+     * ```
      *  @param map A map of mock dependency providers by their ids.
      */
     mockByIds(
@@ -792,3 +976,4 @@ const createGroup = <Providers extends ProviderShape[]>(
 };
 
 export const group = createGroup;
+export const mono = createGroup;

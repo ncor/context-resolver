@@ -48,7 +48,7 @@ app.use(async (ctx, next) => {
 ```
 #### Mocking (for testing)
 ```ts
-const { reviewService } = group($reviewService)
+const { reviewService } = mono($reviewService)
     .mock($memoryDb)()
 ```
 
@@ -186,7 +186,7 @@ app.post("/room/:id/send", chatController.sendMessage)
 
 A provider is a structure that creates instances by resolving its dependencies, with caching and lifecycle management capabilities.
 
-### `createProvider` (`provide`)
+### `createProvider` (aka `provide`)
 
 Creates a provider builder.
 
@@ -220,9 +220,19 @@ const provider = provide("someService")
 
 Unique identifier of the provider.
 
+```ts
+const provider = provide("someService");
+provider.id; // "someService"
+```
+
 ### `.dependencies`
 
 A list of dependency providers.
+
+```ts
+const provider = provide("someService").using(otherProvider)
+provider.dependencies[0].id; // "otherService"
+```
 
 ### resolve (object call)
 
@@ -234,7 +244,7 @@ Resolves an instance by calling its resolver with dependencies.
     - `ttl`: Cache time-to-live (milliseconds).
 
 ```ts
-provider("unique", {
+const instance = await provider("unique", {
     disposer: handleDisposition,
     ttl: 5_000
 });
@@ -242,11 +252,23 @@ provider("unique", {
 
 ### `.complete`
 
-Resolves remaining dependencies based on the container portion already provided. If there is alreadya cached instance under the key, it will be disposed and replaced with a new one.
+Resolves remaining dependencies based on the container portion already provided. If there is already a cached instance under the key, it will be disposed and replaced with a new one.
 - `cacheKey`: Optional key for caching.
 - `cacheOpts`: Optional caching options:
     - `disposer`: Function called upon disposal.
     - `ttl`: Cache time-to-live (milliseconds).
+
+```ts
+const otherProvider = provide("otherService").by(() => () => "other");
+const provider = provide("someService")
+    .using(otherProvider)
+    .by((container) => () => `some ${container.otherService} service`);
+
+const instance = await provider.complete(
+    { otherService: "predefined" },
+    "unique"
+);
+```
 
 ### `.mount`
 
@@ -256,6 +278,14 @@ Caches an already existing instance under the specified key. If there is already
 - `cacheOpts`: Optional caching options:
     - `disposer`: Function called upon disposal.
     - `ttl`: Cache time-to-live (milliseconds).
+```ts
+const provider = provide("someService").by(() => () => "some");
+
+const instance = await provider.mount(
+    "predefined",
+    "unique"
+);
+```
 
 ### `.dispose`
 
@@ -263,74 +293,215 @@ Disposes cached instances.
 
 - `cacheKey`: Optional key to dispose of a specific instance. Disposes all instances if not provided.
 
+```ts
+const provider = provide("someService").by(() => () => "some");
+
+await provider("unique");
+await provider.dispose("unique"); // one instance is disposed
+await provider("unique");
+await provider.dispose(); // all instances are disposed
+```
+
 ### `.clone`
 
 Creates a new provider with the same properties as the original.
+
+```ts
+const provider = provide("someService").by(() => () => "some");
+const cloned = provider.clone();
+cloned.id; // "someService"
+```
 
 ### `.as`
 
 Creates a new provider with a new identifier.
 - `id`: A unique identifier for the provider.
 
+```ts
+const provider = provide("someService").by(() => () => "some");
+const aliased = provider.as("newService");
+aliased.id; // "newService"
+```
+
 ### `.by`
 
 Creates a new provider with a new resolver.
 - `resolver`: A function that creates an instance.
+
+```ts
+const provider = provide("someService").by(() => () => "some");
+const providerWithNewResolver = provider.by(() => () => "new");
+const instance = await providerWithNewResolver();
+instance; // "new"
+```
 
 ### `.using`
 
 Creates a new provider with a specified list of dependencies.
 - `dependencies`: A list of dependency providers.
 
+```ts
+const otherProvider = provide("otherService");
+const provider = provide("someService").using(otherProvider);
+provider.dependencies[0].id; // "otherService"
+```
+
 ### `.withDisposer`
 
 Creates a new provider with a default disposer for all cached instances.
 - `disposer`: A function called upon disposition.
+
+```ts
+const provider = provide("someService").by(() => () => "some")
+    .withDisposer(handleDisposition);
+await provider("unique");
+await provider.dispose("unique");
+```
 
 ### `.persisted`
 
 Creates a new provider with a default cache key for all resolutions.
 - `cacheKey`: The cache key, defaults to `"singleton"` if not specified.
 
+```ts
+const provider = provide("someService").by(() => () => "some").persisted();
+await provider();
+await provider(); // returns the same cached instance
+const instance = await provider("unique"); // returns a new instance with provided cache key
+```
+
+```ts
+const provider = provide("someService").by(() => () => "some").persisted("main");
+await provider(); // cached under "main" key
+await provider("unique"); // cached under "unique" key
+```
+
 ### `.temporary`
 
 Creates a new provider with a default time-to-live for all resolutions.
 - `ttl`: Time-to-live in milliseconds.
 
+```ts
+const provider = provide("someService").by(() => () => "some").temporary(1000);
+await provider(); // cached for 1 second
+```
+
 ### `.inspect`
 
 Returns debugging information.
+
+```ts
+const provider = provide("someService").by(() => () => "some");
+await provider("unique");
+const debugInfo = provider.inspect();
+debugInfo.cache.map.has("unique"); // true
+```
 
 ### `.mock`
 
 Creates a new provider with existing dependency providers replaced by mock providers. Replacement is determined by unique identifiers.
 - `providers`: A list of mock dependency providers.
 
+```ts
+const otherProvider = provide("otherService")
+    .by(() => () => "other");
+const mockOtherProvider = provide("otherService")
+    .by(() => () => "mocked");
+const provider = provide("someService")
+    .using(otherProvider)
+    .by((container) => () => `some ${container.otherService} service`);
+
+const mockedProvider = provider.mock(mockOtherProvider);
+const instance = await mockedProvider()
+instance; // "some mocked service"
+```
+
 ### `.mockByIds`
 Creates a new provider with existing dependency providers replaced by mock providers. Replacement is determined by unique identifiers.
 - `map`: A map of mock dependency providers by their ids.
+
+```ts
+const otherProvider = provide("otherService")
+    .by(() => () => "other");
+const mockOtherProvider = provide("otherService")
+    .by(() => () => "mocked");
+const provider = provide("someService")
+    .using(otherProvider)
+    .by((container) => () => `some ${container.otherService} service`);
+
+const mockedProvider = provider.mockByIds({otherService: mockOtherProvider});
+const instance = await mockedProvider()
+instance; // "some mocked service"
+```
 
 ### `.mockByReference`
 Creates a new provider with existing dependency provider replaced by a mock provider. Replacement is determined by an instance of existing dependency provider.
 - `providerInstance`: An instance of existing dependency provider.
 - `mockProvider`: A mock provider for the specified one.
 
+```ts
+const otherProvider = provide("otherService")
+    .by(() => () => "other");
+const mockOtherProvider = provide("otherService")
+    .by(() => () => "mocked");
+const provider = provide("someService")
+    .using(otherProvider)
+    .by((container) => () => `some ${container.otherService} service`);
+
+const mockedProvider = provider
+    .mockByReference(otherProvider, mockOtherProvider);
+const instance = await mockedProvider()
+instance; // "some mocked service"
+```
+
 ## Provider Group
 
-Combines providers into a group for data representation, transformations, and dependency graph isolation. All operations on the whole graph are performed only in the context of the group, so even if you need to operate on only one provider and its branch, it still needs to be placed in the group.
+Combines providers into a group for data representation, transformations, and dependency graph isolation. All operations on the whole graph are performed only in the context of the group, so even if you need to operate on only one provider and its branch, it still needs to be placed in the group. There is an alias `mono` specifically for this, which allows you to distinguish mono groups from regular ones.
 
-### `createGroup` (`group`)
+### `createGroup` (aka `group`, `mono`)
 
 Combines a list of providers into a group.
 - `providers`: List of providers to group.
+
+```ts
+const first = provide("first").by(() => () => 1);
+const second = provide("second").by(() => () => 2);
+const group = createGroup(first, second);
+```
+
+```ts
+const first = provide("first").by(() => () => 1);
+const second = provide("second").by(() => () => 2);
+const group = group(first, second);
+```
+
+```ts
+const first = provide("first").by(() => () => 1);
+const group = mono(first);
+```
 
 ### `.list`
 
 A list of grouped providers.
 
+```ts
+const first = provide("first").by(() => () => 1);
+const second = provide("second").by(() => () => 2);
+const providerGroup = group(first, second);
+providerGroup.list[0].id; // "first"
+```
+
 ### `.map` (getter)
 
 A map of provider IDs to their respective providers.
+
+```ts
+const first = provide("first").by(() => () => 1);
+const second = provide("second").by(() => () => 2);
+const providerGroup = group(first, second);
+providerGroup.map.first.id; // "first"
+providerGroup.map.second.id; // "second"
+```
 
 ### resolve (object call)
 
@@ -341,9 +512,21 @@ Resolves all instances within the group with dependencies, producing an instance
     - `ttl`: Cache time-to-live (milliseconds).
 
 ```ts
-const instanceMap = await group("cacheKey", {
-    ttl: 1000,
-});
+const first = provide("first").by(() => () => 1);
+const second = provide("second").by(() => () => 2);
+const providerGroup = group(first, second);
+const instanceMap = await providerGroup();
+instanceMap.first; // 1
+instanceMap.second; // 2
+```
+
+```ts
+const first = provide("first").by(() => () => 1);
+const second = provide("second").by(() => () => 2);
+const providerGroup = group(first, second);
+const instanceMap = await providerGroup("cacheKey", { ttl: 1000 });
+instanceMap.first; // 1
+instanceMap.second; // 2
 ```
 
 ### `.dispose`
@@ -351,12 +534,25 @@ const instanceMap = await group("cacheKey", {
 Disposes cached instances of all providers in the group.
 - `cacheKey`: Optional key to dispose instances by a common cache key. Disposes all instances if not provided.
 
+```ts
+const first = provide("first").by(() => () => 1);
+const second = provide("second").by(() => () => 2);
+const providerGroup = group(first, second);
+await providerGroup("cacheKey");
+await providerGroup.dispose("cacheKey"); // dispose all instances under cacheKey
+await providerGroup("cacheKey");
+await providerGroup.dispose(); // dispose all instances
+```
+
 ### `.isolate`
 
 Creates a new group containing isolated copies of the entire dependency graph.
 
 ```ts
-const requestScope = group.isolate();
+const first = provide("first").by(() => () => 1);
+const second = provide("second").by(() => () => 2);
+const providerGroup = group(first, second);
+const requestScope = providerGroup.isolate();
 // Operations on the new group won't affect the original.
 ```
 
@@ -366,7 +562,11 @@ Creates a copy of only one branch, isolating one provider.
 - `selector`: A function that picks a local provider.
 
 ```ts
-const someProvider = group.isolateOne(g => g.someProvider);
+const first = provide("first").by(() => () => 1);
+const second = provide("second").by(() => () => 2);
+const providerGroup = group(first, second);
+const someProvider = providerGroup.isolateOne(g => g.first);
+someProvider.id; // "first"
 ```
 
 ### `.isolateSome`
@@ -375,7 +575,14 @@ Creates a new group with isolated copies of specified providers.
 - `selector`: A function that picks local providers.
 
 ```ts
-const subgroup = group.isolateSome(g => [g.first, g.second]);
+const first = provide("first").by(() => () => 1);
+const second = provide("second").by(() => () => 2);
+const third = provide("third").by(() => () => 3);
+const providerGroup = group(first, second, third);
+const subgroup = providerGroup.isolateSome(g => [g.first, g.second]);
+subgroup.list.length; // 2
+subgroup.map.first.id; // "first"
+subgroup.map.second.id; // "second"
 ```
 
 ### `.add`
@@ -383,20 +590,69 @@ const subgroup = group.isolateSome(g => [g.first, g.second]);
 Creates a new group by adding providers to the current group.
 - `providers`: A list of providers to add.
 
+```ts
+const first = provide("first").by(() => () => 1);
+const second = provide("second").by(() => () => 2);
+const third = provide("third").by(() => () => 3);
+const providerGroup = group(first, second);
+const extendedGroup = providerGroup.add(third);
+extendedGroup.list.length; // 3
+extendedGroup.map.first.id; // "first"
+extendedGroup.map.second.id; // "second"
+extendedGroup.map.third.id; // "third"
+```
+
 ### `.concat`
 
 Creates a new group by merging another group into the current one.
 - `group`: A group to be concatenated.
+
+```ts
+const first = provide("first").by(() => () => 1);
+const second = provide("second").by(() => () => 2);
+const third = provide("third").by(() => () => 3);
+const anotherFirst = provide("anotherFirst").by(() => () => 4);
+const providerGroup = group(first, second);
+const anotherGroup = group(third, anotherFirst);
+const extendedGroup = providerGroup.concat(anotherGroup);
+extendedGroup.list.length; // 4
+extendedGroup.map.first.id; // "first"
+extendedGroup.map.second.id; // "second"
+extendedGroup.map.third.id; // "third"
+extendedGroup.map.anotherFirst.id; // "anotherFirst"
+```
 
 ### `.mock`
 
 Replaces existing providers in the available graph with their mock versions and returns a new group of the same type.
 - `providers`: A list of mock dependency providers.
 
+```ts
+const first = provide("first").by(() => () => 1);
+const second = provide("second").by(() => () => 2);
+const mockSecond = provide("second").by(() => () => "mocked");
+const providerGroup = group(first, second);
+const mockedGroup = providerGroup.mock(mockSecond);
+const instanceMap = await mockedGroup();
+instanceMap.first; // 1
+instanceMap.second; // "mocked"
+```
+
 ### `.mockByIds`
 
 Replaces existing providers in the available graph with their mock versions and returns a new group of the same type.
 - `map`: A map of mock dependency providers by their ids.
+
+```ts
+const first = provide("first").by(() => () => 1);
+const second = provide("second").by(() => () => 2);
+const mockSecond = provide("second").by(() => () => "mocked");
+const providerGroup = group(first, second);
+const mockedGroup = providerGroup.mockByIds({ second: mockSecond });
+const instanceMap = await mockedGroup();
+instanceMap.first; // 1
+instanceMap.second; // "mocked"
+```
 
 # Contribution
 
