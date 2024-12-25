@@ -1,0 +1,38 @@
+{
+    "name": "context-resolver",
+    "version": "0.1.0",
+    "description": "A type-safe, async-first context resolution library for IoC/DI and lifecycle management.",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/ncor/context-resolver.git"
+    },
+    "bugs": {
+        "url": "https://github.com/ncor/context-resolver/issues"
+    },
+    "homepage": "https://github.com/ncor/context-resolver#readme",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "require": "./dist/index.js",
+            "import": "./dist/index.mjs",
+            "default": "./dist/index.mjs"
+        }
+    },
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "npx tsup",
+        "test": "pnpx vitest coverage --coverage",
+        "benchmark": "pnpx vitest benchmark"
+    },
+    "author": "ensi",
+    "license": "MIT",
+    "devDependencies": {
+        "p-map": "^7.0.3",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+        "@vitest/coverage-v8": "^2.1.8"
+    }
+}
