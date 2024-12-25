@@ -46,6 +46,11 @@ app.use(async (ctx, next) => {
     await next()
 })
 ```
+#### Mocking (testing)
+```ts
+const { reviewService } = group($db, $reviewService)
+    .mock($memoryDb)()
+```
 
 ### Features
 - **Thin.** The library can be seen as a wrapper over simple functional composition with memoization.
@@ -159,6 +164,9 @@ app.post("/room/:id/send", chatController.sendMessage)
     - [persisted](#persisted)
     - [temporary](#temporary)
     - [inspect](#inspect)
+    - [mock](#mock)
+    - [mockByIds](#mockByIds)
+    - [mockByReference](#mockByReference)
 - [Provider group](#provider-group)
     - [createGroup (group)](#creategroup-group)
     - [list](#list)
@@ -170,6 +178,8 @@ app.post("/room/:id/send", chatController.sendMessage)
     - [isolateSome](#isolatesome)
     - [add](#add)
     - [concat](#concat)
+    - [mock](#mock-1)
+    - [mockByIds](#mockByIds-1)
 
 
 ## Provider
@@ -291,6 +301,20 @@ Creates a new provider with a default time-to-live for all resolutions.
 
 Returns debugging information.
 
+### `.mock`
+
+Creates a new provider with existing dependency providers replaced by mock providers. Replacement is determined by unique identifiers.
+- `providers`: A list of mock dependency providers.
+
+### `.mockByIds`
+Creates a new provider with existing dependency providers replaced by mock providers. Replacement is determined by unique identifiers.
+- `map`: A map of mock dependency providers by their ids.
+
+### `.mockByReference`
+Creates a new provider with existing dependency provider replaced by a mock provider. Replacement is determined by an instance of existing dependency provider.
+- `providerInstance`: An instance of existing dependency provider.
+- `mockProvider`: A mock provider for the specified one.
+
 ## Provider Group
 
 Combines providers into a group for data representation, transformations, and dependency graph isolation.
@@ -363,6 +387,16 @@ Creates a new group by adding providers to the current group.
 
 Creates a new group by merging another group into the current one.
 - `group`: A group to be concatenated.
+
+### `.mock`
+
+Replaces existing providers in the available graph with their mock versions and returns a new group of the same type.
+- `providers`: A list of mock dependency providers.
+
+### `.mockByIds`
+
+Replaces existing providers in the available graph with their mock versions and returns a new group of the same type.
+- `map`: A map of mock dependency providers by their ids.
 
 # Contribution
 

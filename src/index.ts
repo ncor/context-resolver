@@ -8,6 +8,7 @@ type OmitCallSignature<T> = {
 type InferCallSignature<T> = T extends { (...args: infer A): infer R }
     ? (...args: A) => R
     : never;
+type SomeOf<T extends any[]> = T[number][];
 
 const unique = <T extends any[]>(xs: T) => Array.from(new Set(xs)) as T;
 
@@ -21,7 +22,7 @@ type Resolver<C extends Record<string, any>, I> = (
 type InferProviderInstance<P extends ProviderShape> =
     P extends Provider<infer I, any, any> ? I : never;
 
-type MapProvidersInstancesById<T extends ProviderShape[]> = {
+type MapProvidersOutputsById<T extends ProviderShape[]> = {
     [P in T[number] as P["id"]]: InferProviderInstance<P>;
 };
 
@@ -77,7 +78,7 @@ type Provider<
      * @param cacheOpts Optional caching options.
      */
     complete(
-        resolvedPart: Partial<MapProvidersInstancesById<Dependencies>>,
+        resolvedPart: Partial<MapProvidersOutputsById<Dependencies>>,
         cacheKey?: string,
         cacheOpts?: CachingOpts<Instance>,
     ): Promise<Instance>;
@@ -124,7 +125,8 @@ type Provider<
      * // one instance is disposed
      * ```
      *
-     * @param cacheKey Optional key to dispose an instance by its cache key. Disposes all instances if not provided.
+     * @param cacheKey Optional key to dispose an instance by its cache key.
+     * isposes all instances if not provided.
      */
     dispose(cacheKey?: string): Promise<void>;
     /**
@@ -134,7 +136,7 @@ type Provider<
      */
     by<NewInstance>(
         resolver: Resolver<
-            Prettify<MapProvidersInstancesById<Dependencies>>,
+            Prettify<MapProvidersOutputsById<Dependencies>>,
             NewInstance
         >,
     ): Provider<NewInstance, Id, Dependencies>;
@@ -176,6 +178,38 @@ type Provider<
     inspect(): {
         cache: ResolutionCache<Instance>;
     };
+    /**
+     * Сreates a new provider with existing dependency providers
+     * replaced by mock providers. Replacement is determined
+     * by a unique identifiers.
+     *
+     * @param providers A list of mock dependency providers.
+     */
+    mock(
+        ...providers: SomeOf<Dependencies>
+    ): Provider<Instance, Id, Dependencies>;
+    /**
+     * Сreates a new provider with existing dependency provider
+     * replaced by a mock provider. Replacement is determined
+     * by a unique identifiers.
+     *
+     * @param map A map of mock dependency providers by their ids.
+     */
+    mockByIds(
+        map: Partial<MapProvidersById<Dependencies>>,
+    ): Provider<Instance, Id, Dependencies>;
+    /**
+     * Сreates a new provider with existing dependency provider
+     * replaced by a mock provider. Replacement is determined
+     * by an instance of existing dependency provider.
+     *
+     * @param providerInstance An instance of existing dependency provider.
+     * @param mockProvider A mock provider for the specified one.
+     */
+    mockByReference<ProviderType extends Dependencies[number]>(
+        providerInstance: ProviderType,
+        mockProvider: ProviderType,
+    ): Provider<Instance, Id, Dependencies>;
 };
 
 type ProviderShape = Provider<any, string, any[]>;
@@ -200,7 +234,7 @@ export const createProvider = <
          * A function that creates an instance.
          */
         resolver?: Resolver<
-            Prettify<MapProvidersInstancesById<Dependencies>>,
+            Prettify<MapProvidersOutputsById<Dependencies>>,
             Instance
         >;
         /**
@@ -374,6 +408,39 @@ export const createProvider = <
             disposer,
         });
 
+    const mock: ProviderType["mock"] = (...mockProviders) =>
+        createProvider(id, {
+            ...optsToSave,
+            dependencies: dependencies.map(
+                (p) => mockProviders.find((mp) => mp.id === p.id) || p,
+            ) as Dependencies,
+            resolver,
+            disposer,
+        });
+
+    const mockByIds: ProviderType["mockByIds"] = (mockProviderMap) =>
+        createProvider(id, {
+            ...optsToSave,
+            dependencies: dependencies.map(
+                (p) => mockProviderMap[p.id] || p,
+            ) as Dependencies,
+            resolver,
+            disposer,
+        });
+
+    const mockByReference: ProviderType["mockByReference"] = (
+        providerInstance,
+        mockProvider,
+    ) =>
+        createProvider(id, {
+            ...optsToSave,
+            dependencies: dependencies.map((p) =>
+                p === providerInstance ? mockProvider : p,
+            ) as Dependencies,
+            resolver,
+            disposer,
+        });
+
     const instanceCallable = resolve;
 
     const instanceWithoutCallable: OmitCallSignature<ProviderType> = {
@@ -390,6 +457,9 @@ export const createProvider = <
         persisted,
         temporary,
         clone,
+        mock,
+        mockByIds,
+        mockByReference,
     };
 
     return Object.assign(
@@ -502,7 +572,7 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
     (
         cacheKey?: string,
         cacheOpts?: UnrelatedCachingOpts,
-    ): Promise<MapProvidersInstancesById<Providers>>;
+    ): Promise<MapProvidersOutputsById<Providers>>;
     /**
      * Disposes cached instances of all providers in the group.
      *
@@ -561,9 +631,32 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
      *
      * @param selector A function that picks local providers.
      */
-    isolateSome<SomeProviders extends Providers[number][]>(
+    isolateSome<SomeProviders extends SomeOf<Providers>>(
         selector: (map: MapProvidersById<Providers>) => SomeProviders,
     ): ProviderGroup<SomeProviders>;
+    /**
+     * Replaces existing providers in the available graph with their mock versions
+     * and returns a new group of the same type.
+     *
+     * @param providers A list of mock dependency providers.
+     */
+    mock(...providers: SomeOf<Providers>): ProviderGroup<Providers>;
+    /**
+     * Replaces existing providers in the available graph with their mock versions
+     * and returns a new group of the same type.
+     *
+     * @param providers A list of mock dependency providers.
+     */
+    mock(...providers: SomeOf<Providers>): ProviderGroup<Providers>;
+    /**
+     * Replaces existing providers in the available graph with their mock versions
+     * and returns a new group of the same type.
+     *
+     *  @param map A map of mock dependency providers by their ids.
+     */
+    mockByIds(
+        map: Partial<MapProvidersById<Providers>>,
+    ): ProviderGroup<Providers>;
 };
 
 /**
@@ -581,22 +674,45 @@ const createGroup = <Providers extends ProviderShape[]>(
     ) as MapProvidersById<Providers>;
 
     const createCloneResolver = () => {
-        const visited = new WeakMap<ProviderShape, ProviderShape>();
+        const cloneMap = new WeakMap<ProviderShape, ProviderShape>();
 
         const resolveClone = (provider: ProviderShape) => {
-            const alreadyCloned = visited.get(provider);
+            const alreadyCloned = cloneMap.get(provider);
             if (alreadyCloned) return alreadyCloned;
 
             let cloned = provider.clone();
-            visited.set(provider, cloned);
+            cloneMap.set(provider, cloned);
 
             if (cloned.dependencies.length > 0)
-                cloned = cloned.using(...cloned.dependencies.map(resolveClone));
+                cloned = cloned.mock(...cloned.dependencies.map(resolveClone));
 
             return cloned;
         };
 
         return resolveClone;
+    };
+
+    const createMockResolver = (
+        mockMap:
+            | Map<string, ProviderShape>
+            | Partial<MapProvidersById<Providers>>,
+    ) => {
+        return (provider: ProviderShape): ProviderShape => {
+            const mock = (
+                mockMap instanceof Map
+                    ? mockMap.get(provider.id)
+                    : mockMap[provider.id]
+            ) as ProviderShape | undefined;
+
+            if (mock) return mock;
+
+            if (provider.dependencies.length > 0)
+                return provider.mock(
+                    ...provider.dependencies.map(createMockResolver(mockMap)),
+                );
+
+            return provider;
+        };
     };
 
     const build: InferCallSignature<GroupType> = async (cacheKey, opts) =>
@@ -637,6 +753,21 @@ const createGroup = <Providers extends ProviderShape[]>(
         >;
     };
 
+    const mock: GroupType["mock"] = (...mockProviders) => {
+        const mockMap = new Map<string, ProviderShape>();
+        mockProviders.forEach((p) => mockMap.set(p.id, p));
+
+        return createGroup(
+            ...(list.map(createMockResolver(mockMap)) as Providers),
+        );
+    };
+
+    const mockByIds: GroupType["mockByIds"] = (mockMap) => {
+        return createGroup(
+            ...(list.map(createMockResolver(mockMap)) as Providers),
+        );
+    };
+
     const instanceCallable = build;
 
     const instanceWithoutCallable: OmitCallSignature<GroupType> = {
@@ -650,6 +781,8 @@ const createGroup = <Providers extends ProviderShape[]>(
         isolate,
         isolateOne,
         isolateSome,
+        mock,
+        mockByIds,
     };
 
     return Object.assign(
