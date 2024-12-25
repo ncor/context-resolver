@@ -28,7 +28,7 @@ const $userRepository = providesRepository
     .as("userRepository")
     .by(createUserRepository)
 ```
-#### Isolation (scopes)
+#### Isolation (for scopes)
 ```ts
 const $services = group(
     userService,
@@ -46,9 +46,9 @@ app.use(async (ctx, next) => {
     await next()
 })
 ```
-#### Mocking (testing)
+#### Mocking (for testing)
 ```ts
-const { reviewService } = group($db, $reviewService)
+const { reviewService } = group($reviewService)
     .mock($memoryDb)()
 ```
 
@@ -317,7 +317,7 @@ Creates a new provider with existing dependency provider replaced by a mock prov
 
 ## Provider Group
 
-Combines providers into a group for data representation, transformations, and dependency graph isolation.
+Combines providers into a group for data representation, transformations, and dependency graph isolation. All operations on the whole graph are performed only in the context of the group, so even if you need to operate on only one provider and its branch, it still needs to be placed in the group.
 
 ### `createGroup` (`group`)
 
