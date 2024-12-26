@@ -2,56 +2,6 @@
 
 A type-safe, async-first context resolution library for IoC/DI and lifecycle management.
 
-#### Dependency injection
-```ts
-const $config = provide("config").by(loadConfig)
-const $db = provide("db")
-    .using($config)
-    .by(({ config }) => connectToDb(config.dbUrl))
-    .persisted()
-    .withDisposer((db) => db.disconnect())
-
-const db = $db()
-```
-#### Caching
-```ts
-const cachedUser = $user(ctx.user.id, {
-    ttl: 5_000
-})
-```
-#### Reusability
-```ts
-const providesRepository = provide("repository")
-    .using($db)
-
-const $userRepository = providesRepository
-    .as("userRepository")
-    .by(createUserRepository)
-```
-#### Isolation (for scopes)
-```ts
-const $services = group(
-    userService,
-    authService,
-    imageService,
-    messageService
-)
-
-app.use(async (ctx, next) => {
-    const $requestScope = $services.isolate()
-    
-    const services = $requestScope()
-    ctx.set("services", services)
-
-    await next()
-})
-```
-#### Mocking (for testing)
-```ts
-const { reviewService } = mono($reviewService)
-    .mock($memoryDb)()
-```
-
 ### Features
 - **Thin.** The library can be seen as a wrapper over simple functional composition with memoization.
 - **Relational.** There are no tables by default, instances are resolved by calling their dependency providers.
@@ -78,73 +28,6 @@ bun add context-resolver    # bun
 deno add context-resolver   # deno
 ```
 
-# Basic usage
-
-```ts
-// ...
-import { provide, group } from "context-resolver"
-
-const $config = provide("config").by(loadConfig)
-
-const $databaseClient = provide("databaseClient")
-    .using($config)
-    .by(({ config }) =>
-           connectToDatabase(config.databaseUrl)
-    )
-    .persisted()
-    .withDisposer(client => client.disconnect())
-
-const providesRepository = provide("repository")
-    .using($databaseClient)
-const $userRepository = providesRepository
-    .as("userRepository")
-    .by(createUserRepository)
-const $sessionRepository = providesRepository
-    .as("sessionRepository")
-    .by(createSessionRepository)
-const $messageRepository = providesRepository
-    .as("messageRepository")
-    .by(createMessageRepository)
-const $roomRepository = providesRepository
-    .as("roomRepository")
-    .by(createRoomRepository)
-
-const $authService = provide("authService")
-    .using($userRepository, $sessionRepository)
-    .by(createAuthService)
-const $chatService = provide("chatService")
-    .using(
-        $authService,
-        $messageRepository,
-        $roomRepository
-    )
-    .by(createChatService)
-
-const $authController = provide("authController")
-    .using($authService)
-    .by(createAuthController)
-const $chatController = provide("chatController")
-    .using($chatService)
-    .by(createAuthController)
-
-const $controllers = group(
-    $authController,
-    $chatController
-)
-const {
-    authController,
-    chatController
-} = $controllers()
-
-app.post("/login", authController.login);
-app.post("/register", authController.register);
-
-app.get("/rooms", chatController.getAllRooms);
-app.post("/room/join", chatController.joinRoom);
-app.get("/room/:id/messages", chatController.getRoomMessages);
-app.post("/room/:id/send", chatController.sendMessage)
-```
-
 # Reference
 
 ### Table of contents
@@ -165,493 +48,322 @@ app.post("/room/:id/send", chatController.sendMessage)
     - [temporary](#temporary)
     - [inspect](#inspect)
     - [mock](#mock)
-    - [mockByIds](#mockByIds)
-    - [mockByReference](#mockByReference)
+    - [isolate](#isolate)
 - [Provider group](#provider-group)
     - [createGroup](#creategroup-group)
     - [list](#list)
     - [map](#map-getter)
     - [dispose](#dispose-1)
     - [resolve](#resolve-object-call-1)
-    - [isolate](#isolate)
-    - [isolateOne](#isolateone)
-    - [isolateSome](#isolatesome)
+    - [isolate](#isolate-1)
     - [add](#add)
     - [concat](#concat)
     - [mock](#mock-1)
-    - [mockByIds](#mockByIds-1)
 
 
 ## Provider
 
-A provider is a structure that creates instances by resolving its dependencies, with caching and lifecycle management capabilities.
+A provider is a structure that creates and stores instances by resolving its dependencies.
 
 ### `createProvider` (aka `provide`)
 
-Creates a provider builder.
-
-- `id`: Unique identifier for the provider.
-- `opts`: Optional configuration object:
-    - `dependencies`: A list of dependency providers.
-    - `resolver`: An asynchronous function that creates an instance.
-    - `disposer`: A function to dispose of an instance.
-    - `defaultCacheKey`: Default key for caching the instance.
-    - `defaultCacheTTL`: Default time-to-live for all resolutions.
+Creates a provider.
+- `id`: Unique identifier.
+- `opts?`: Configuration:
+    - `dependencies?`: A list of dependency providers.
+    - `resolver?`: A function that creates an instance.
+    - `disposer?`: When this function is set, all instances will be cached with that disposer unless a different lifetime is intentionally set.
+    - `defaultCacheKey?`: When this string is set, a first instance will be stored under that key, and all future resolutions will return that entity unless a different key is intentionally specified.
+    - `defaultCacheTTL?`: When this number is set, all instances will be cached with that lifetime unless a different lifetime is intentionally set.
 ```ts
-const provider = createProvider("someService", {
-    dependencies: [otherProvider],
-    resolver: createSomeService,
-    disposer: handleSomeServiceDisposition,
-    defaultCacheKey: "main",
-    defaultCacheTTL: 5_000
-});
+const $service = createProvider("service", {
+    dependencies: [$otherService],
+    resolver: createService,
+    disposer: handleServiceDisposition,
+    defaultCacheKey: "key",
+    defaultCacheTTL: 1_000
+})
 ```
 
 ```ts
-const provider = provide("someService")
-    .using(otherProvider)
-    .by(createSomeService)
-    .withDisposer(handleSomeServiceDisposition)
+const $service = provide("service")
+    .using($otherService)
+    .by(createService)
+    .withDisposer(handleServiceDisposition)
     .persisted("main")
-    .temporary(5_000)
-```
-
-### `.id`
-
-Unique identifier of the provider.
-
-```ts
-const provider = provide("someService");
-provider.id; // "someService"
-```
-
-### `.dependencies`
-
-A list of dependency providers.
-
-```ts
-const provider = provide("someService").using(otherProvider)
-provider.dependencies[0].id; // "otherService"
+    .temporary(1_000)
 ```
 
 ### resolve (object call)
 
 Resolves an instance by calling its resolver with dependencies.
 
-- `cacheKey`: Optional key for caching.
-- `cacheOpts`: Optional caching options:
-    - `disposer`: Function called upon disposal.
-    - `ttl`: Cache time-to-live (milliseconds).
+- `cacheKey?`: A key for caching.
+- `cacheOpts?`: Caching options:
+    - `disposer?`: A custom disposer.
+    - `ttl?`: An instance lifetime in milliseconds.
 
 ```ts
-const instance = await provider("unique", {
-    disposer: handleDisposition,
+const service = await $service("key", {
+    disposer: handleServiceDisposition,
     ttl: 5_000
-});
+})
 ```
 
-### `.complete`
+### `.id` (property)
 
-Resolves remaining dependencies based on the container portion already provided. If there is already a cached instance under the key, it will be disposed and replaced with a new one.
-- `cacheKey`: Optional key for caching.
-- `cacheOpts`: Optional caching options:
-    - `disposer`: Function called upon disposal.
-    - `ttl`: Cache time-to-live (milliseconds).
+Unique identifier.
+
+### `.dependencies` (property)
+
+A list of dependency providers.
+
+### `.as` (builder)
+
+Creates a new provider with a modified unique identifier.
+- `id`: Unique identifier.
+
+### `.by` (builder)
+
+Creates a new provider with a modified resolver.
+- `resolver`: A function that creates an instance.
+
+### `.using` (builder)
+
+Creates a new provider with a modified list of dependencies. The provider created by this method must define a new resolver because the set of dependency interfaces changes.
+- `dependencies`: A list of dependency providers.
+
+### `.withDisposer` (builder)
+
+Creates a new provider with a modified disposer.
+- `disposer`: A function that is called when an instance is disposed.
+
+### `.persisted` (builder)
+
+Creates a new provider with a modified default cache key. When a default cache key is set, a first instance will be stored under that key, and all future resolutions will return that entity unless a different key is intentionally specified.
+- `cacheKey`: The cache key, defaults to `"singleton"` if not specified.
 
 ```ts
-const otherProvider = provide("otherService").by(() => () => "other");
-const provider = provide("someService")
-    .using(otherProvider)
-    .by((container) => () => `some ${container.otherService} service`);
+const $service = provide("service")
+    .by(createService)
+    .persisted("key")
 
-const instance = await provider.complete(
-    { otherService: "predefined" },
-    "unique"
-);
+await provider() === await provider()
+await provider() !== await provider("different")
+```
+
+### `.temporary` (builder)
+
+Creates a new provider with a modified default cached instance lifetime. When the cached instance lifetime is set to default, all instances will be cached with that lifetime unless a different lifetime is intentionally set.
+- `ttl`: An instance lifetime in milliseconds.
+
+```ts
+const $service = provide("service")
+    .by(createService)
+    .temporary(1_000)
+
+await provider("key1") // cached for 1 second
+await provider("key2", { ttl: 2_000 }) // cached for 2 seconds
+```
+
+### `.dispose`
+
+Removes all instances from the cache, calling their disposers. Will attempt to dispose only one entity if a cache key was specified.
+- `cacheKey?`: A cache key of a specific instance.
+
+### `.mock`
+
+Creates a new provider by replacing dependency providers with compatible mocks, traversing an entire provider context graph. A replaced provider is identified by a unique identifier.
+- `providers`: A list of mock dependency providers.
+```ts
+const $first = provide("first")
+    .by(createFirst)
+const $second = provide("second")
+    .using($first)
+    .by(createSecond)
+const $third = provide("third")
+    .using($second)
+    .by(createThird)
+
+const $thirdWithMockedFirst = $third
+    .mock(provide("first").by(createFakeFirst))
 ```
 
 ### `.mount`
 
 Caches an already existing instance under the specified key. If there is already a cached instance under the key, it will be disposed and replaced with a new one.
 - `instance`: An instance to cache.
-- `cacheKey`: Optional key for caching.
-- `cacheOpts`: Optional caching options:
-    - `disposer`: Function called upon disposal.
-    - `ttl`: Cache time-to-live (milliseconds).
-```ts
-const provider = provide("someService").by(() => () => "some");
+- `cacheKey`: A key under which the instance will be cached.
+- `cacheOpts?`: Caching options:
+    - `disposer?`: A custom disposer.
+    - `ttl?`: An instance lifetime in milliseconds.
 
-const instance = await provider.mount(
-    "predefined",
-    "unique"
-);
-```
+### `.complete`
 
-### `.dispose`
-
-Disposes cached instances.
-
-- `cacheKey`: Optional key to dispose of a specific instance. Disposes all instances if not provided.
+Resolves remaining dependencies based on the container portion already provided. If there is already a cached instance under the key, it will be disposed and replaced with a new one.
+- `resolvedPart`: Already resolved part of dependency container.
+- `cacheKey?`: A key for caching.
+- `cacheOpts?`: Caching options:
+    - `disposer?`: A custom disposer.
+    - `ttl?`: An instance lifetime in milliseconds.
 
 ```ts
-const provider = provide("someService").by(() => () => "some");
+const $first = provide("first")
+    .by(createFirst)
+const $second = provide("second")
+    .by(createSecond)
+const $third = provide("third")
+    .using($first, $second)
+    .by(createThird)
 
-await provider("unique");
-await provider.dispose("unique"); // one instance is disposed
-await provider("unique");
-await provider.dispose(); // all instances are disposed
+const third = await $service.complete(
+    { first: createFirst(...) }
+)
 ```
 
 ### `.clone`
 
-Creates a new provider with the same properties as the original.
+Creates a new provider with the same properties as an original.
 
+### `.isolate`
+
+Clones the current provider and its context into an identical transitive graph.
 ```ts
-const provider = provide("someService").by(() => () => "some");
-const cloned = provider.clone();
-cloned.id; // "someService"
-```
+const $first = provide("first")
+    .by(createFirst)
+const $second = provide("second")
+    .using($first)
+    .by(createSecond)
 
-### `.as`
+const $isolatedSecond = $second.isolate()
 
-Creates a new provider with a new identifier.
-- `id`: A unique identifier for the provider.
-
-```ts
-const provider = provide("someService").by(() => () => "some");
-const aliased = provider.as("newService");
-aliased.id; // "newService"
-```
-
-### `.by`
-
-Creates a new provider with a new resolver.
-- `resolver`: A function that creates an instance.
-
-```ts
-const provider = provide("someService").by(() => () => "some");
-const providerWithNewResolver = provider.by(() => () => "new");
-const instance = await providerWithNewResolver();
-instance; // "new"
-```
-
-### `.using`
-
-Creates a new provider with a specified list of dependencies.
-- `dependencies`: A list of dependency providers.
-
-```ts
-const otherProvider = provide("otherService");
-const provider = provide("someService").using(otherProvider);
-provider.dependencies[0].id; // "otherService"
-```
-
-### `.withDisposer`
-
-Creates a new provider with a default disposer for all cached instances.
-- `disposer`: A function called upon disposition.
-
-```ts
-const provider = provide("someService").by(() => () => "some")
-    .withDisposer(handleDisposition);
-await provider("unique");
-await provider.dispose("unique");
-```
-
-### `.persisted`
-
-Creates a new provider with a default cache key for all resolutions.
-- `cacheKey`: The cache key, defaults to `"singleton"` if not specified.
-
-```ts
-const provider = provide("someService").by(() => () => "some").persisted();
-await provider();
-await provider(); // returns the same cached instance
-const instance = await provider("unique"); // returns a new instance with provided cache key
-```
-
-```ts
-const provider = provide("someService").by(() => () => "some").persisted("main");
-await provider(); // cached under "main" key
-await provider("unique"); // cached under "unique" key
-```
-
-### `.temporary`
-
-Creates a new provider with a default time-to-live for all resolutions.
-- `ttl`: Time-to-live in milliseconds.
-
-```ts
-const provider = provide("someService").by(() => () => "some").temporary(1000);
-await provider(); // cached for 1 second
+$isolatedSecond !== $second
+$isolatedSecond.dependencies[0].id !== $first
 ```
 
 ### `.inspect`
 
 Returns debugging information.
 
-```ts
-const provider = provide("someService").by(() => () => "some");
-await provider("unique");
-const debugInfo = provider.inspect();
-debugInfo.cache.map.has("unique"); // true
-```
-
-### `.mock`
-
-Creates a new provider with existing dependency providers replaced by mock providers. Replacement is determined by unique identifiers.
-- `providers`: A list of mock dependency providers.
-
-```ts
-const otherProvider = provide("otherService")
-    .by(() => () => "other");
-const mockOtherProvider = provide("otherService")
-    .by(() => () => "mocked");
-const provider = provide("someService")
-    .using(otherProvider)
-    .by((container) => () => `some ${container.otherService} service`);
-
-const mockedProvider = provider.mock(mockOtherProvider);
-const instance = await mockedProvider()
-instance; // "some mocked service"
-```
-
-### `.mockByIds`
-Creates a new provider with existing dependency providers replaced by mock providers. Replacement is determined by unique identifiers.
-- `map`: A map of mock dependency providers by their ids.
-
-```ts
-const otherProvider = provide("otherService")
-    .by(() => () => "other");
-const mockOtherProvider = provide("otherService")
-    .by(() => () => "mocked");
-const provider = provide("someService")
-    .using(otherProvider)
-    .by((container) => () => `some ${container.otherService} service`);
-
-const mockedProvider = provider.mockByIds({otherService: mockOtherProvider});
-const instance = await mockedProvider()
-instance; // "some mocked service"
-```
-
-### `.mockByReference`
-Creates a new provider with existing dependency provider replaced by a mock provider. Replacement is determined by an instance of existing dependency provider.
-- `providerInstance`: An instance of existing dependency provider.
-- `mockProvider`: A mock provider for the specified one.
-
-```ts
-const otherProvider = provide("otherService")
-    .by(() => () => "other");
-const mockOtherProvider = provide("otherService")
-    .by(() => () => "mocked");
-const provider = provide("someService")
-    .using(otherProvider)
-    .by((container) => () => `some ${container.otherService} service`);
-
-const mockedProvider = provider
-    .mockByReference(otherProvider, mockOtherProvider);
-const instance = await mockedProvider()
-instance; // "some mocked service"
-```
-
 ## Provider Group
 
-Combines providers into a group for data representation, transformations, and dependency graph isolation. All operations on the whole graph are performed only in the context of the group, so even if you need to operate on only one provider and its branch, it still needs to be placed in the group. There is an alias `mono` specifically for this, which allows you to distinguish mono groups from regular ones.
+A provider group is set of providers grouped together into a common context.
 
-### `createGroup` (aka `group`, `mono`)
+### `createGroup` (aka `group`)
 
-Combines a list of providers into a group.
-- `providers`: List of providers to group.
-
-```ts
-const first = provide("first").by(() => () => 1);
-const second = provide("second").by(() => () => 2);
-const group = createGroup(first, second);
-```
+Creates a provider group.
+- `providers`: A list of providers to group.
 
 ```ts
-const first = provide("first").by(() => () => 1);
-const second = provide("second").by(() => () => 2);
-const group = group(first, second);
+const $all = createGroup($first, $second)
 ```
-
 ```ts
-const first = provide("first").by(() => () => 1);
-const group = mono(first);
+const $all = group($first, $second)
 ```
 
-### `.list`
+### `.list` (property)
 
-A list of grouped providers.
-
-```ts
-const first = provide("first").by(() => () => 1);
-const second = provide("second").by(() => () => 2);
-const providerGroup = group(first, second);
-providerGroup.list[0].id; // "first"
-```
+A list of providers.
 
 ### `.map` (getter)
 
-A map of provider IDs to their respective providers.
+A map of providers.
 
 ```ts
-const first = provide("first").by(() => () => 1);
-const second = provide("second").by(() => () => 2);
-const providerGroup = group(first, second);
-providerGroup.map.first.id; // "first"
-providerGroup.map.second.id; // "second"
+const $first = provide("first")
+    .by(createFirst)
+const $second = provide("second")
+    .by(createSecond)
+
+const $allMap = group($first, $second).map
+
+$allMap.first.id === "first"
+$allMap.second.id === "second"
 ```
 
 ### resolve (object call)
 
-Resolves all instances within the group with dependencies, producing an instance map. Supports simplified caching for all instances.
-
-- `cacheKey`: Optional key for caching group instances.
-- `cacheOpts`: Optional caching options:
-    - `ttl`: Cache time-to-live (milliseconds).
-
-```ts
-const first = provide("first").by(() => () => 1);
-const second = provide("second").by(() => () => 2);
-const providerGroup = group(first, second);
-const instanceMap = await providerGroup();
-instanceMap.first; // 1
-instanceMap.second; // 2
-```
+Resolves instances of all providers from a list, producing an instance map. Supports simplified caching for all instances.
+- `cacheKey?`: A key under which all instances will be cached.
+- `cacheOpts?`: Caching options:
+    - `ttl?`: An instance lifetime in milliseconds.
 
 ```ts
-const first = provide("first").by(() => () => 1);
-const second = provide("second").by(() => () => 2);
-const providerGroup = group(first, second);
-const instanceMap = await providerGroup("cacheKey", { ttl: 1000 });
-instanceMap.first; // 1
-instanceMap.second; // 2
+const $first = provide("first")
+    .by(createFirst)
+const $second = provide("second")
+    .by(createSecond)
+
+const all = group($first, $second)()
+
+all === {
+    first: ..., // instance of the first
+    second: ... // instance of the second
+}
 ```
+
+### `.add` (builder)
+
+Creates a new group with a modified list of providers, to which new ones have been added.
+- `providers`: A list of providers to add.
+
+### `.concat` (builder)
+
+Creates a new group with a modified list of providers, to which providers from another group were added.
+- `group`: A group to be concatenated.
 
 ### `.dispose`
 
-Disposes cached instances of all providers in the group.
-- `cacheKey`: Optional key to dispose instances by a common cache key. Disposes all instances if not provided.
-
-```ts
-const first = provide("first").by(() => () => 1);
-const second = provide("second").by(() => () => 2);
-const providerGroup = group(first, second);
-await providerGroup("cacheKey");
-await providerGroup.dispose("cacheKey"); // dispose all instances under cacheKey
-await providerGroup("cacheKey");
-await providerGroup.dispose(); // dispose all instances
-```
+Call dispose on all providers from a list.
+- `cacheKey?`: A cache key that will be used in all dispositions.
 
 ### `.isolate`
 
-Creates a new group containing isolated copies of the entire dependency graph.
+Clones a known graph into an identical one, returning a group with the same set of interfaces.
 
 ```ts
-const first = provide("first").by(() => () => 1);
-const second = provide("second").by(() => () => 2);
-const providerGroup = group(first, second);
-const requestScope = providerGroup.isolate();
-// Operations on the new group won't affect the original.
-```
+const $first = provide("first")
+    .by(createFirst)
+const $second = provide("second")
+    .using($first)
+    .by(createSecond)
+const $third = provide("third")
+    .using($first)
+    .by(createThird)
 
-### `.isolateOne`
+const $allIsolated = group($first, $second, $third).isolate()
 
-Creates a copy of only one branch, isolating one provider.
-- `selector`: A function that picks a local provider.
-
-```ts
-const first = provide("first").by(() => () => 1);
-const second = provide("second").by(() => () => 2);
-const providerGroup = group(first, second);
-const someProvider = providerGroup.isolateOne(g => g.first);
-someProvider.id; // "first"
-```
-
-### `.isolateSome`
-
-Creates a new group with isolated copies of specified providers.
-- `selector`: A function that picks local providers.
-
-```ts
-const first = provide("first").by(() => () => 1);
-const second = provide("second").by(() => () => 2);
-const third = provide("third").by(() => () => 3);
-const providerGroup = group(first, second, third);
-const subgroup = providerGroup.isolateSome(g => [g.first, g.second]);
-subgroup.list.length; // 2
-subgroup.map.first.id; // "first"
-subgroup.map.second.id; // "second"
-```
-
-### `.add`
-
-Creates a new group by adding providers to the current group.
-- `providers`: A list of providers to add.
-
-```ts
-const first = provide("first").by(() => () => 1);
-const second = provide("second").by(() => () => 2);
-const third = provide("third").by(() => () => 3);
-const providerGroup = group(first, second);
-const extendedGroup = providerGroup.add(third);
-extendedGroup.list.length; // 3
-extendedGroup.map.first.id; // "first"
-extendedGroup.map.second.id; // "second"
-extendedGroup.map.third.id; // "third"
-```
-
-### `.concat`
-
-Creates a new group by merging another group into the current one.
-- `group`: A group to be concatenated.
-
-```ts
-const first = provide("first").by(() => () => 1);
-const second = provide("second").by(() => () => 2);
-const third = provide("third").by(() => () => 3);
-const anotherFirst = provide("anotherFirst").by(() => () => 4);
-const providerGroup = group(first, second);
-const anotherGroup = group(third, anotherFirst);
-const extendedGroup = providerGroup.concat(anotherGroup);
-extendedGroup.list.length; // 4
-extendedGroup.map.first.id; // "first"
-extendedGroup.map.second.id; // "second"
-extendedGroup.map.third.id; // "third"
-extendedGroup.map.anotherFirst.id; // "anotherFirst"
+Object.is(
+    $allIsolated.$second.dependencies[0],
+    $allIsolated.$third.dependencies[0]
+) === true
+// the same thing with just `group($second, $third)`
 ```
 
 ### `.mock`
 
-Replaces existing providers in the available graph with their mock versions and returns a new group of the same type.
+Creates a new group by replacing dependency providers with compatible mocks, traversing an entire available graph. A replaced provider is identified by a unique identifier.
 - `providers`: A list of mock dependency providers.
 
 ```ts
-const first = provide("first").by(() => () => 1);
-const second = provide("second").by(() => () => 2);
-const mockSecond = provide("second").by(() => () => "mocked");
-const providerGroup = group(first, second);
-const mockedGroup = providerGroup.mock(mockSecond);
-const instanceMap = await mockedGroup();
-instanceMap.first; // 1
-instanceMap.second; // "mocked"
-```
+const $first = provide("first")
+    .by(createFirst)
+const $second = provide("second")
+     .using($first)
+    .by(createSecond)
+const $third = provide("third")
+    .using($first)
+    .by(createThird)
 
-### `.mockByIds`
+const $all = group($first, $second, $third)
+const $allWithMockedFirst = $all.mock(
+    provide("first").by(createFakeFirst)
+)
+const $mockedFirst = $allWithMockedFirst.map.first
 
-Replaces existing providers in the available graph with their mock versions and returns a new group of the same type.
-- `map`: A map of mock dependency providers by their ids.
-
-```ts
-const first = provide("first").by(() => () => 1);
-const second = provide("second").by(() => () => 2);
-const mockSecond = provide("second").by(() => () => "mocked");
-const providerGroup = group(first, second);
-const mockedGroup = providerGroup.mockByIds({ second: mockSecond });
-const instanceMap = await mockedGroup();
-instanceMap.first; // 1
-instanceMap.second; // "mocked"
+$mockedFirst !== $first
+$allWithMockedFirst.map.second.dependencies[0] === $mockedFirst
+$allWithMockedFirst.map.third.dependencies[0] === $mockedFirst
 ```
 
 # Contribution

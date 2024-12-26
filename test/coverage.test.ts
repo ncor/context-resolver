@@ -1,4 +1,4 @@
-import { group, mono, provide } from "../src";
+import { group, provide } from "../src";
 import { describe, expect, it, vi } from "vitest";
 
 describe("single provider", () => {
@@ -177,53 +177,37 @@ describe("single provider", () => {
         expect(timer2).not.toBe(undefined);
     });
 
-    describe("mocking", () => {
-        it("should mock a dependency provider", async () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b").by(() => "b");
-            const $c = provide("c")
-                .using($a, $b)
-                .by((d) => d.a + d.b);
+    it("should isolate", async () => {
+        const $a = provide("a").by(() => "a");
+        const $b = provide("b")
+            .by(() => "b")
+            .using($a);
+        const $c = provide("c")
+            .by(() => "c")
+            .using($b);
 
-            const $mocked = $c.mock(provide("a").by(() => "mockedA"));
+        const $iso = $c.isolate();
 
-            const result = await $mocked();
+        expect($iso).not.toBe(undefined);
+        expect($iso).not.toBe($c);
+        expect($iso.dependencies[0]).not.toBe($b);
+        expect($iso.dependencies[0].dependencies[0]).not.toBe($a);
+    });
 
-            expect(result).toBe("mockedAb");
-        });
+    it("should mock", async () => {
+        const $a = provide("a").by(() => "a");
+        const $b = provide("b")
+            .using($a)
+            .by((d) => d.a + "b");
+        const $c = provide("c")
+            .using($b)
+            .by((d) => d.b + "c");
 
-        it("should mock a dependency provider by id", async () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b").by(() => "b");
-            const $c = provide("c")
-                .using($a, $b)
-                .by((d) => d.a + d.b);
+        const $mocked = $c.mock(provide("a").by(() => "mockedA"));
 
-            const $mocked = $c.mockByIds({
-                a: provide("a").by(() => "mockedA"),
-            });
+        const result = await $mocked();
 
-            const result = await $mocked();
-
-            expect(result).toBe("mockedAb");
-        });
-
-        it("should mock a dependency provider by reference", async () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b").by(() => "b");
-            const $c = provide("c")
-                .using($a, $b)
-                .by((d) => d.a + d.b);
-
-            const $mockedA = provide("a").by(() => "mockedA");
-            const $mocked = $c.mockByReference($a, $mockedA);
-
-            const result = await $mocked();
-
-            expect(result).toBe("mockedAb");
-            expect($mocked.dependencies[0]).not.toBe($a);
-            expect($mocked.dependencies[0]).toBe($mockedA);
-        });
+        expect(result).toBe("mockedAbc");
     });
 });
 
@@ -239,17 +223,6 @@ describe("many providers", () => {
             expect($all.map).toStrictEqual({
                 a: $a,
                 b: $b,
-            });
-        });
-
-        it("should create as mono", () => {
-            const $a = provide("a").by(() => "a");
-            const $all = mono($a);
-
-            expect($all).not.toBe(undefined);
-            expect($all.list).toStrictEqual([$a]);
-            expect($all.map).toStrictEqual({
-                a: $a,
             });
         });
 
@@ -365,37 +338,6 @@ describe("many providers", () => {
             expect($iso.map.b.dependencies[0]).toBe($iso.map.a);
             expect($iso.map.c.dependencies[0]).toBe($iso.map.a);
         });
-
-        it("should isolate one", async () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b")
-                .using($a)
-                .by(() => "b");
-            const $c = provide("c")
-                .using($a)
-                .by(() => "c");
-
-            const $c2 = group($a, $b, $c).isolateOne((g) => g.c);
-
-            expect($c2).not.toBe($c);
-            expect($c2.dependencies[0]).not.toBe($a);
-        });
-
-        it("should isolate some", async () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b")
-                .using($a)
-                .by(() => "b");
-            const $c = provide("c")
-                .using($a)
-                .by(() => "c");
-
-            const $iso = group($a, $b, $c).isolateSome((g) => [g.a, g.c]);
-
-            expect($iso.map.a).not.toBe($a);
-            expect($iso.map.c).not.toBe($c);
-            expect($iso.map.c.dependencies[0]).toBe($iso.map.a);
-        });
     });
 
     describe("dependency graph", () => {
@@ -422,45 +364,23 @@ describe("many providers", () => {
         });
     });
 
-    describe("mocking", () => {
-        it("should mock a dependency provider", async () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b").by(() => "b");
-            const $c = provide("c")
-                .using($a, $b)
-                .by((d) => d.a + d.b);
+    it("should mock", async () => {
+        const $a = provide("a").by(() => "a");
+        const $b = provide("b").by(() => "b");
+        const $c = provide("c")
+            .using($a, $b)
+            .by((d) => d.a + d.b);
 
-            const $mocked = group($a, $b, $c).mock(
-                provide("a").by(() => "mockedA"),
-            );
+        const $mocked = group($a, $b, $c).mock(
+            provide("a").by(() => "mockedA"),
+        );
 
-            const result = await $mocked();
+        const result = await $mocked();
 
-            expect(result).toStrictEqual({
-                a: "mockedA",
-                b: "b",
-                c: "mockedAb",
-            });
-        });
-
-        it("should mock a dependency provider by id", async () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b").by(() => "b");
-            const $c = provide("c")
-                .using($a, $b)
-                .by((d) => d.a + d.b);
-
-            const $mocked = group($a, $b, $c).mockByIds({
-                a: provide("a").by(() => "mockedA"),
-            });
-
-            const result = await $mocked();
-
-            expect(result).toStrictEqual({
-                a: "mockedA",
-                b: "b",
-                c: "mockedAb",
-            });
+        expect(result).toStrictEqual({
+            a: "mockedA",
+            b: "b",
+            c: "mockedAb",
         });
     });
 });
