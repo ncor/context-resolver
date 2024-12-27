@@ -324,8 +324,9 @@ export const createProvider = <
     const defaultCacheTTL = opts?.defaultCacheTTL;
     const cache = createResolutionCache<Instance>();
 
+    const container = group(...dependencies);
     const resolveWithDependencies = async () =>
-        resolver(await group(...dependencies)());
+        resolver(await container());
 
     const cacheResolution = (
         key: string,
