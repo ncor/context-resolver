@@ -33,7 +33,7 @@ describe("single provider", () => {
 
     it("should cache for a time", async () => {
         const $i = provide("i").by(() => "i");
-        await $i("key", { ttl: 1000 });
+        await $i("key", 1000);
         const timer = $i.inspect().cache.get("key")?.disposeTimer;
 
         expect(timer).not.toBe(undefined);
@@ -58,35 +58,11 @@ describe("single provider", () => {
     it("should dispose", async () => {
         const $i = provide("i").by(() => "i");
 
-        let dispositionCount = 0;
-        await $i("1", { disposer: () => dispositionCount++ });
-        await $i("2", { disposer: () => dispositionCount++ });
+        await $i("1");
+        await $i("2");
         await $i.dispose();
 
-        expect(dispositionCount).toBe(2);
-    });
-
-    it("should dispose by a cache key", async () => {
-        const $i = provide("i").by(() => "i");
-
-        let dispositionKey: string | undefined;
-        await $i("1", { disposer: () => (dispositionKey = "1") });
-        await $i("2", { disposer: () => (dispositionKey = "2") });
-        await $i.dispose("2");
-
-        expect(dispositionKey).toBe("2");
-    });
-
-    it("should set a default disposer", async () => {
-        let isDisposed = false;
-        const $i = provide("i")
-            .by(() => "i")
-            .withDisposer(() => (isDisposed = true));
-
-        await $i("key");
-        await $i.dispose();
-
-        expect(isDisposed).toBe(true);
+        expect($i.inspect().cache.all().length).toBe(0);
     });
 
     it("should clone", async () => {
@@ -105,16 +81,13 @@ describe("single provider", () => {
         expect(await $i("key")).toBe(instance);
     });
 
-    it("should dispose previously mounted value", async () => {
-        const disposer = vi.fn();
+    it("should mount and dispose existing", async () => {
         const $i = provide("i").by(() => "i");
-        const instance = "mounted";
 
-        await $i.mount("first", "key", { disposer });
-        await $i.mount(instance, "key");
+        await $i("key");
+        await $i.mount("mounted", "key");
 
-        expect(disposer).toHaveBeenCalledTimes(1);
-        expect(await $i("key")).toBe(instance);
+        expect(await $i("key")).toBe("mounted");
     });
 
     it("should complete the dependencies", async () => {
@@ -169,7 +142,7 @@ describe("single provider", () => {
             .by(() => "i")
             .temporary(1000);
 
-        await $i("key1", { ttl: 2000 });
+        await $i("key1", 2000);
         const timer1 = $i.inspect().cache.get("key1")?.disposeTimer;
         expect(timer1).not.toBe(undefined);
         await $i("key2");
@@ -208,6 +181,41 @@ describe("single provider", () => {
         const result = await $mocked();
 
         expect(result).toBe("mockedAbc");
+    });
+
+    it("should call start hook", async () => {
+        const startHook = vi.fn();
+        const $i = provide("i")
+            .by(() => "i")
+            .onStart(startHook);
+
+        await $i.start();
+
+        expect(startHook).toHaveBeenCalledTimes(1);
+    });
+
+    it("should call stop hook", async () => {
+        const stopHook = vi.fn();
+        const $i = provide("i")
+            .by(() => "i")
+            .onStop(stopHook);
+
+        await $i();
+        await $i.stop();
+
+        expect(stopHook).toHaveBeenCalledTimes(1);
+    });
+
+    it("should call stop hook with dispose", async () => {
+        const stopHook = vi.fn();
+        const $i = provide("i")
+            .by(() => "i")
+            .onStop(stopHook);
+
+        await $i();
+        await $i.stop(true);
+
+        expect(stopHook).toHaveBeenCalledTimes(1);
     });
 });
 
@@ -296,7 +304,7 @@ describe("many providers", () => {
             const $a = provide("a").by(() => "a");
             const $b = provide("b").by(() => "b");
 
-            await group($a, $b)("key", { ttl: 1000 });
+            await group($a, $b)("key", 1000);
             const timer = $a.inspect().cache.get("key")?.disposeTimer;
             const timer2 = $b.inspect().cache.get("key")?.disposeTimer;
 
@@ -305,20 +313,15 @@ describe("many providers", () => {
         });
 
         it("should dispose", async () => {
-            let dispositionCount = 0;
-
-            const $a = provide("a")
-                .by(() => "a")
-                .withDisposer(() => dispositionCount++);
-            const $b = provide("b")
-                .by(() => "b")
-                .withDisposer(() => dispositionCount++);
+            const $a = provide("a").by(() => "a");
+            const $b = provide("b").by(() => "b");
 
             const $all = group($a, $b);
             await $all("key");
             await $all.dispose();
 
-            expect(dispositionCount).toBe(2);
+            expect($a.inspect().cache.get("key")).toBe(undefined);
+            expect($b.inspect().cache.get("key")).toBe(undefined);
         });
 
         it("should isolate", async () => {
@@ -337,6 +340,87 @@ describe("many providers", () => {
             expect($iso.map.c).not.toBe($c);
             expect($iso.map.b.dependencies[0]).toBe($iso.map.a);
             expect($iso.map.c.dependencies[0]).toBe($iso.map.a);
+        });
+
+        it("should mock", async () => {
+            const $a = provide("a").by(() => "a");
+            const $b = provide("b").by(() => "b");
+            const $c = provide("c")
+                .using($a, $b)
+                .by((d) => d.a + d.b);
+
+            const $mocked = group($a, $b, $c).mock(
+                provide("a").by(() => "mockedA"),
+            );
+
+            const result = await $mocked();
+
+            expect(result).toStrictEqual({
+                a: "mockedA",
+                b: "b",
+                c: "mockedAb",
+            });
+        });
+
+        it("should call start hooks", async () => {
+            const startHookA = vi.fn();
+            const startHookB = vi.fn();
+            const $a = provide("a")
+                .by(() => "a")
+                .onStart(startHookA);
+            const $b = provide("b")
+                .by(() => "b")
+                .onStart(startHookB);
+
+            const $all = group($a, $b);
+            $all.onStart(startHookA);
+            $all.onStart(startHookB);
+            await $all.start();
+
+            expect(startHookA).toHaveBeenCalledTimes(3);
+            expect(startHookB).toHaveBeenCalledTimes(3);
+        });
+
+        it("should call stop hooks", async () => {
+            const stopHookA = vi.fn();
+            const stopHookB = vi.fn();
+            const $a = provide("a")
+                .by(() => "a")
+                .onStop(stopHookA);
+            const $b = provide("b")
+                .by(() => "b")
+                .onStop(stopHookB);
+
+            const $all = group($a, $b);
+            $all.onStop(stopHookA);
+            $all.onStop(stopHookB);
+
+            await $all();
+            await $all.stop();
+
+            expect(stopHookA).toHaveBeenCalledTimes(3);
+            expect(stopHookB).toHaveBeenCalledTimes(3);
+        });
+
+        it("should call stop hooks with dispose", async () => {
+            const stopHookA = vi.fn();
+            const stopHookB = vi.fn();
+            const $a = provide("a")
+                .by(() => "a")
+                .onStop(stopHookA);
+            const $b = provide("b")
+                .by(() => "b")
+                .onStop(stopHookB);
+
+            const $all = group($a, $b);
+            $all.onStop(stopHookA);
+            $all.onStop(stopHookB);
+
+            await $all();
+            await $all.stop(true);
+
+            expect(stopHookA).toHaveBeenCalledTimes(3);
+            expect(stopHookB).toHaveBeenCalledTimes(3);
         });
     });
 
@@ -361,26 +445,6 @@ describe("many providers", () => {
                 c: "abc",
                 d: "abd",
             });
-        });
-    });
-
-    it("should mock", async () => {
-        const $a = provide("a").by(() => "a");
-        const $b = provide("b").by(() => "b");
-        const $c = provide("c")
-            .using($a, $b)
-            .by((d) => d.a + d.b);
-
-        const $mocked = group($a, $b, $c).mock(
-            provide("a").by(() => "mockedA"),
-        );
-
-        const result = await $mocked();
-
-        expect(result).toStrictEqual({
-            a: "mockedA",
-            b: "b",
-            c: "mockedAb",
         });
     });
 });
