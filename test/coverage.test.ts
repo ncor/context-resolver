@@ -43,7 +43,7 @@ describe("single provider", () => {
         const testFor = async (defaultKey?: string) => {
             const $i = provide("i")
                 .by(() => "i")
-                .persisted(defaultKey);
+                .once(defaultKey);
             await $i();
             const cache = $i.inspect().cache;
             const entry = cache.get(defaultKey || "singleton");

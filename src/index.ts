@@ -135,7 +135,7 @@ type Provider<
      * ```ts
      * const $service = provide("service")
      *     .by(createService)
-     *     .persisted("key")
+     *     .once("key")
      *
      * await provider() === await provider()
      * await provider() !== await provider("different")
@@ -143,7 +143,7 @@ type Provider<
      *
      * @param cacheKey Cache key. Defaults to `"singleton"` if not specified.
      */
-    persisted(cacheKey?: string): Provider<Instance, Id, Dependencies>;
+    once(cacheKey?: string): Provider<Instance, Id, Dependencies>;
     /**
      * Creates a new provider with a modified default cached instance lifetime. When the cached instance lifetime is set to default, all instances will be cached with that lifetime unless a different lifetime is intentionally set.
      * ```ts
@@ -441,7 +441,7 @@ export const createProvider = <
             disposer,
         });
 
-    const persisted: ProviderType["persisted"] = (cacheKey) =>
+    const once: ProviderType["once"] = (cacheKey) =>
         createProvider(id, {
             ...optsToSave,
             dependencies,
@@ -500,7 +500,7 @@ export const createProvider = <
         by,
         using,
         withDisposer,
-        persisted,
+        once,
         temporary,
         clone,
         mock,

@@ -28,6 +28,195 @@ bun add context-resolver    # bun
 deno add context-resolver   # deno
 ```
 
+# Examples
+
+## Basic usage
+
+```ts
+// Creates a provider with the id "logger"
+const $logger = provide("logger")
+    // Sets a resolver to the `createLogger` function
+    .by(createLogger)
+
+const $userService = provide("userService")
+    // Binds the `$logger` provider as a depedency
+    .using($logger)
+    // Accessing logger instance via container by its provider id
+    .by(({ logger }) =>
+        userService({ logger: logger.prefix("userService") })
+    )
+```
+
+To resolve an instance, simply call a provider.
+```ts
+const userService = $userService()
+
+userService.createUser(...)
+// Logs { type: "TRACE", action: "USER_CREATED", ... }
+```
+
+## Caching
+
+### Default options
+
+```ts
+const $env = provide("env").by(getEnv)
+const $databaseClient = provide("databaseClient")
+    .using($env)
+    .by(({ env }) => connectToDatabase(env.databaseUrl))
+    /**
+     * Sets a default cache key,
+     * forcing all resolutions to implicitly use it.
+     */
+    .once("globalConnection")
+    /**
+     * Sets a default disposer,
+     * forcing all resolutions to implicitly use it.
+     */
+    .withDisposer(client => client.disconnect())
+    /**
+     * Sets a default cached instance lifetime,
+     * forcing all resolutions to implicitly use it.
+     */
+    .temporary(60_000)
+
+/**
+ * Now all resolutions will lead to the same instance
+ * and will be stored in cache for a minute.
+ */
+await $databaseConnection() === await $databaseConnection()
+```
+
+### Retrieval
+
+To resolve a cached instance, either by saving it or by retrieving an existing one, you only need to specify the key as the first argument. You can also specify custom caching options. If the default key or options were specified in the providers, they will be used, if none are specified. If either the key or any of the options were not specified explicitly, the default values from the provider will be used, if any were specified.
+```ts
+await $databaseConnection("customKey", {
+    /**
+     * Custom caching options (optional):
+     */
+    disposer: ...,
+    ttl: ...
+})
+```
+
+### Disposition
+
+To clear the cache, you can call the dispose method, which will also call instance disposers, if any were specified. In our case, we already have the default disposer set, so the client will be disconnected.
+```ts
+await $databaseConnection.dispose()
+
+/**
+ * You also can dispose specific cached instance
+ * by its cache key.
+ */
+await $databaseConnection.dispose("key")
+```
+
+### Cloning and isolation
+
+We can clone a provider by creating an identical version of it and keeping references to its dependency providers.
+```ts
+const $clonedFirst = $first.clone()
+
+$clonedFirst !== $first
+$clonedFirst.dependencies[n] == $first.dependencies[n]
+```
+
+But if we need to completely isolate the provider from the main graph, we can use the corresponding method. It clones the entire context needed to resolve the instance and creates a new graph with references to identical interfaces.
+```ts
+const $first = provide("first")
+    .by(createFirst)
+const $second = provide("second")
+    .using($first)
+    .by(createSecond)
+
+const $isolatedSecond = $second.isolate()
+
+$isolatedSecond !== $second
+$isolatedSecond.dependencies[0].id !== $first
+```
+
+### Mocking
+
+When testing, sometimes it is necessary to replace the module context with another one in order to test it without side effects. For this, you can use a special method that replaces dependency providers by a unique identifier with others with an identical interface. The replacement occurs not only in the list of direct dependencies, but also in the entire context.
+```ts
+const $first = provide("first")
+    .by(createFirst)
+const $second = provide("second")
+     .using($first)
+    .by(createSecond)
+const $third = provide("third")
+    .using($first)
+    .by(createThird)
+
+const $all = group($first, $second, $third)
+const $allWithMockedFirst = $all.mock(
+    provide("first").by(createFakeFirst)
+)
+const $mockedFirst = $allWithMockedFirst.map.first
+
+$mockedFirst !== $first
+$allWithMockedFirst.map.second.dependencies[0] === $mockedFirst
+$allWithMockedFirst.map.third.dependencies[0] === $mockedFirst
+```
+
+## Groups
+
+### Construction and representation
+
+A set of providers can be grouped into a special structure that provides operations on the context of this set.
+```ts
+const $all = group($first, $second, $third)
+```
+
+We can add new providers to groups and concatenate other groups.
+```ts
+group
+    .add($fourth)
+    .add($fifth, $sixth)
+    .concat(group($seventh, $eighth))
+```
+
+And access a list and map of a set.
+```ts
+group.list === [$first, $second, ...]
+group.map === {
+    first: ...,
+    second: ...,
+    ...
+}            
+```
+
+### Bulk methods
+
+The group has almost identical API for resolution, disposition, isolation and mocking. The difference is that these operations apply to all providers in a common context, and we cannot pass custom disposers, since a different set of interfaces is possible.
+
+#### Resolution
+```ts
+await group("key", {
+    ttl: ...
+})
+```
+
+#### Disposition
+```ts
+await group.dispose("key")
+```
+
+#### Isolation
+Returns a new group.
+```ts
+// Returns a new group.
+await group.isolate()
+```
+
+#### Mocking
+Returns a new group.
+```ts
+await group.mock(...)
+```
+
 # Reference
 
 ### Table of contents
@@ -44,7 +233,7 @@ deno add context-resolver   # deno
     - [by](#by)
     - [using](#using)
     - [withDisposer](#withdisposer)
-    - [persisted](#persisted)
+    - [once](#once)
     - [temporary](#temporary)
     - [inspect](#inspect)
     - [mock](#mock)
@@ -90,7 +279,7 @@ const $service = provide("service")
     .using($otherService)
     .by(createService)
     .withDisposer(handleServiceDisposition)
-    .persisted("main")
+    .once("main")
     .temporary(1_000)
 ```
 
@@ -138,7 +327,7 @@ Creates a new provider with a modified list of dependencies. The provider create
 Creates a new provider with a modified disposer.
 - `disposer`: A function that is called when an instance is disposed.
 
-### `.persisted` (builder)
+### `.once` (builder)
 
 Creates a new provider with a modified default cache key. When a default cache key is set, a first instance will be stored under that key, and all future resolutions will return that entity unless a different key is intentionally specified.
 - `cacheKey`: The cache key, defaults to `"singleton"` if not specified.
@@ -146,7 +335,7 @@ Creates a new provider with a modified default cache key. When a default cache k
 ```ts
 const $service = provide("service")
     .by(createService)
-    .persisted("key")
+    .once("key")
 
 await provider() === await provider()
 await provider() !== await provider("different")
