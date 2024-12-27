@@ -136,8 +136,13 @@ type Provider<
      * returning the current provider.
      * The start event is fired when `.start` method
      * of the current provider is called.
+     * ```ts
+     * $service.onStart(fn)
+     * await $service.start()
+     * // fn is called
+     * ```
      *
-     * @param fn A function that will be called.
+     * @param fn A function that will be called on a start event.
      */
     onStart(fn: EventHookFn): Provider<Instance, Id, Dependencies>;
     /**
@@ -145,8 +150,13 @@ type Provider<
      * returning the current provider.
      * The stop event is fired when `.stop` method
      * of the current provider is called.
+     * ```ts
+     * $service.onStop(fn)
+     * await $service.stop()
+     * // fn is called
+     * ```
      *
-     * @param fn A function that will be called.
+     * @param fn A function that will be called on a stop event.
      */
     onStop(fn: EventHookFn): Provider<Instance, Id, Dependencies>;
     /**
@@ -687,7 +697,8 @@ type MapProvidersById<T extends ProviderShape[]> = {
  */
 type ProviderGroup<Providers extends ProviderShape[]> = {
     /**
-     * Resolves instances of all providers from a list, producing an instance map. Supports simplified caching for all instances.
+     * Resolves instances of all providers from a list, producing an instance map.
+     * The passed parameters will be applied to every resolution.
      * ```ts
      * const $first = provide("first")
      *     .by(createFirst)
@@ -748,14 +759,14 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
      * Calls `onStart` method of each provider in the list,
      * returning the current group.
      *
-     * @param fn Will be passed in method calls.
+     * @param fn A function that will be called on a start event.
      */
     onStart(fn: EventHookFn): ProviderGroup<Providers>;
     /**
      * Calls `onStop` method of each provider in the list,
      * returning the current group.
      *
-     * @param fn Will be passed in method calls.
+     * @param fn A function that will be called on a stop event.
      */
     onStop(fn: EventHookFn): ProviderGroup<Providers>;
     /**
@@ -769,7 +780,7 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
      * returning a promise that will resolve when all
      * hooks of all providers have resolved.
      *
-     * @param shouldDispose Will be passed in method calls.
+     * @param shouldDispose Determines whether to initiate a disposition afterward.
      */
     stop(shouldDispose?: boolean): Promise<void>;
     /**
