@@ -27,8 +27,8 @@ type Unique<T extends readonly any[], Seen = never> = T extends [
 const unique = <T extends any[]>(xs: T) => Array.from(new Set(xs)) as T;
 
 type ResolverEventHooksInterface = {
-    onStart(hook: EventHook): void;
-    onStop(hook: EventHook): void;
+    onStart(hook: EventHookFn): void;
+    onStop(hook: EventHookFn): void;
 };
 
 /**
@@ -54,6 +54,15 @@ type Provider<
     Id extends string,
     Dependencies extends ProviderShape[],
 > = {
+    /**
+     * Resolves an instance by calling its resolver with dependencies.
+     * ```ts
+     * const service = await $service("key", 1_000)
+     * ```
+     *
+     * @param cacheKey A key under which the instance will be cached.
+     * @param ttl A cached instance lifetime in milliseconds.
+     */
     (cacheKey?: string, ttl?: number): Promise<Instance>;
     /**
      * Unique identifier.
@@ -106,7 +115,10 @@ type Provider<
      */
     once(cacheKey?: string): Provider<Instance, Id, Dependencies>;
     /**
-     * Creates a new provider with a modified default cached instance lifetime. When the cached instance lifetime is set to default, all instances will be cached with that lifetime unless a different lifetime is intentionally set.
+     * Creates a new provider with a modified default cached instance lifetime.
+     * When the cached instance lifetime is set to default, all instances
+     * will be cached with that lifetime unless a different lifetime is
+     * intentionally set.
      * ```ts
      * const $service = provide("service")
      *     .by(createService)
@@ -116,16 +128,50 @@ type Provider<
      * await provider("key2", { ttl: 2_000 }) // cached for 2 seconds
      * ```
      *
-     * @param An instance lifetime in milliseconds.
+     * @param A cached instance lifetime in milliseconds.
      */
     temporary(ttl: number): Provider<Instance, Id, Dependencies>;
-    onStart(hook: EventHook): Provider<Instance, Id, Dependencies>;
-    onStop(hook: EventHook): Provider<Instance, Id, Dependencies>;
+    /**
+     * Registers a function that will be called on a start event,
+     * returning the current provider.
+     * The start event is fired when `.start` method
+     * of the current provider is called.
+     *
+     * @param fn A function that will be called.
+     */
+    onStart(fn: EventHookFn): Provider<Instance, Id, Dependencies>;
+    /**
+     * Registers a function that will be called on a stop event,
+     * returning the current provider.
+     * The stop event is fired when `.stop` method
+     * of the current provider is called.
+     *
+     * @param fn A function that will be called.
+     */
+    onStop(fn: EventHookFn): Provider<Instance, Id, Dependencies>;
+    /**
+     * Fires a start event, calling all hook functions of this event
+     * and returning a promise that will resolve when
+     * all hooks have resolved.
+     */
     start(): Promise<void>;
+    /**
+     * Fires a stop event, calling all hook functions of this event
+     * and returning a promise that will resolve when
+     * all hooks have resolved.
+     * Initiates disposition afterward if `shouldDispose` is `true`.
+     *
+     * @param fn Determines whether to initiate a disposition afterward.
+     */
     stop(shouldDispose?: boolean): Promise<void>;
+    /**
+     * Removes all instances from the cache.
+     */
     dispose(): void;
     /**
-     * Creates a new provider by replacing dependency providers with compatible mocks, traversing an entire provider context graph. A replaced provider is identified by a unique identifier.
+     * Creates a new provider by replacing dependency providers with compatible
+     * mocks, traversing an entire provider context graph.
+     * A replaced provider is identified by a unique identifier.
      * ```ts
      * const $first = provide("first")
      *     .by(createFirst)
@@ -151,16 +197,39 @@ type Provider<
      * Caches an already existing instance under the specified key.
      * If there is already a cached instance under the key,
      * it will be disposed and replaced with a new one.
+     * Returns a promise of its resolution.
      *
      * @param instance An instance to cache.
      * @param cacheKey A key under which the instance will be cached.
-     * @param cacheOpts Optional caching options.
+     * @param ttl A cached instance lifetime in milliseconds.
      */
     mount(
         instance: Instance,
         cacheKey: string,
         ttl?: number,
     ): Promise<Instance>;
+    /**
+     * Resolves remaining dependencies based on the container portion
+     * already provided. If there is already a cached instance
+     * under the key, it will be disposed and replaced with a new one.
+     * ```ts
+     * const $first = provide("first")
+     *     .by(createFirst)
+     * const $second = provide("second")
+     *     .by(createSecond)
+     * const $third = provide("third")
+     *     .using($first, $second)
+     *     .by(createThird)
+     *
+     * cosnt third = await $service.complete(
+     *     { first: createFirst(...) }
+     * )
+     * ```
+     *
+     * @param resolvedPart Already resolved part of dependency container.
+     * @param cacheKey A key under which the instance will be cached.
+     * @param ttl A cached instance lifetime in milliseconds.
+     */
     complete(
         resolvedPart: Partial<MapProvidersOutputsById<Dependencies>>,
         cacheKey?: string,
@@ -524,20 +593,20 @@ const createResolutionCache = <Instance>(): ResolutionCache<Instance> => {
     };
 };
 
-type EventHook = () => MaybePromise<any>;
+type EventHookFn = () => MaybePromise<any>;
 
 type EventManager = {
-    startEventHooks: EventHook[];
-    stopEventHooks: EventHook[];
-    registerStartEventHook(hook: EventHook): void;
-    registerStopEventHook(hook: EventHook): void;
+    startEventHooks: EventHookFn[];
+    stopEventHooks: EventHookFn[];
+    registerStartEventHook(hook: EventHookFn): void;
+    registerStopEventHook(hook: EventHookFn): void;
     fireStartEvent(): Promise<void>;
     fireStopEvent(): Promise<void>;
 };
 
 const createEventManager = () => {
-    const startEventHooks: EventHook[] = [];
-    const stopEventHooks: EventHook[] = [];
+    const startEventHooks: EventHookFn[] = [];
+    const stopEventHooks: EventHookFn[] = [];
 
     const registerStartEventHook: EventManager["registerStartEventHook"] = (
         hook,
@@ -634,7 +703,7 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
      * ```
      *
      * @param cacheKey A key under which all instances will be cached.
-     * @param cacheOpts Caching options.
+     * @param ttl A cached instance lifetime in milliseconds.
      */
     (
         cacheKey?: string,
@@ -675,13 +744,41 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
     concat<OtherProviders extends ProviderShape[]>(
         group: ProviderGroup<OtherProviders>,
     ): ProviderGroup<[...Providers, ...OtherProviders]>;
-    onStart(hook: EventHook): ProviderGroup<Providers>;
-    onStop(hook: EventHook): ProviderGroup<Providers>;
+    /**
+     * Calls `onStart` method of each provider in the list,
+     * returning the current group.
+     *
+     * @param fn Will be passed in method calls.
+     */
+    onStart(fn: EventHookFn): ProviderGroup<Providers>;
+    /**
+     * Calls `onStop` method of each provider in the list,
+     * returning the current group.
+     *
+     * @param fn Will be passed in method calls.
+     */
+    onStop(fn: EventHookFn): ProviderGroup<Providers>;
+    /**
+     * Calls `start` method of each provider in the list,
+     * returning a promise that will resolve when all
+     * hooks of all providers have resolved.
+     */
     start(): Promise<void>;
+    /**
+     * Calls `stop` method of each provider in the list,
+     * returning a promise that will resolve when all
+     * hooks of all providers have resolved.
+     *
+     * @param shouldDispose Will be passed in method calls.
+     */
     stop(shouldDispose?: boolean): Promise<void>;
+    /**
+     * Calls `dispose` method of each provider in the list.
+     */
     dispose(): void;
     /**
-     * * Clones a known graph into an identical one, returning a group with the same set of interfaces.
+     * Clones a known graph into an identical one, returning a group
+     * with the same set of interfaces.
      * ```ts
      * const $first = provide("first")
      *     .by(createFirst)
@@ -703,7 +800,9 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
      */
     isolate(): ProviderGroup<Providers>;
     /**
-     * Creates a new group by replacing dependency providers with compatible mocks, traversing an entire available graph. A replaced provider is identified by a unique identifier.
+     * Creates a new group by replacing dependency providers with
+     * compatible mocks, traversing an entire available graph.
+     * A replaced provider is identified by a unique identifier.
      *
      * ```ts
      * const $first = provide("first")
@@ -734,7 +833,8 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
 };
 
 /**
- * Creates a provider group, a set of providers grouped together into a common context.
+ * Creates a provider group, a set of providers
+ * grouped together into a common context.
  *
  * @param providers A list of providers to group.
  */
