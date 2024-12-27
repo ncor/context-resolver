@@ -7,7 +7,8 @@ A type-safe, async-first context resolution library for IoC/DI and lifecycle man
 - **Relational.** There are no tables by default, instances are resolved by calling their dependency providers.
 - **Complete type-safety.** All functions and generated structures are fully typed, which helps in supporting large graphs with many dependencies and identifiers.
 - **Constructors are async functions.** Resolvers, or constructors, are asynchronous functions by default, which allows you to provide any value using any method.
-- **Caching and lifecycle management.** Entities can be cached for future access (either permanently or temporary) and disposed with a custom function call.
+- **Caching.** Instances can be cached for future access with the ability to be saved for a specific time and deleted manually.
+- **Hooks.** You can fire start and stop events and attach hooks to them within a single provider or a whole group.
 - **Grouping and isolation.** Multiple providers can be grouped into a convenient structure that can be exchanged. It also allows isolating the entire graph or its individual branches into a set of new entities, which is useful for scoping.
 
 ### What it doesn't support
@@ -70,11 +71,6 @@ const $databaseClient = provide("databaseClient")
      */
     .once("globalConnection")
     /**
-     * Sets a default disposer,
-     * forcing all resolutions to implicitly use it.
-     */
-    .withDisposer(client => client.disconnect())
-    /**
      * Sets a default cached instance lifetime,
      * forcing all resolutions to implicitly use it.
      */
@@ -89,28 +85,58 @@ await $databaseConnection() === await $databaseConnection()
 
 ### Retrieval
 
-To resolve a cached instance, either by saving it or by retrieving an existing one, you only need to specify the key as the first argument. You can also specify custom caching options. If the default key or options were specified in the providers, they will be used, if none are specified. If either the key or any of the options were not specified explicitly, the default values from the provider will be used, if any were specified.
+To resolve a cached instance, either by saving it or by retrieving an existing one, you only need to specify the key as the first argument. To use a custom instance lifetime, you can specify this value in the second argument. If either a cache key or ttl were not specified explicitly, the default values from the provider will be used, if any were specified.
 ```ts
-await $databaseConnection("customKey", {
-    /**
-     * Custom caching options (optional):
-     */
-    disposer: ...,
-    ttl: ...
-})
+await $databaseConnection("customKey", 30_000)
 ```
 
 ### Disposition
 
-To clear the cache, you can call the dispose method, which will also call instance disposers, if any were specified. In our case, we already have the default disposer set, so the client will be disconnected.
+To clear the cache, you can call the dispose method.
 ```ts
 await $databaseConnection.dispose()
+```
+
+## Lifecycle
+
+There is often a need to run code at program startup and termination after the tree has been built and modules have been resolved, for example, establishing a connection to a broker at the beginning and breaking it at termination. For this, providers have built-in support for start and stop events, which can be hooked anywhere, even in the resolver.
+```ts
+const $brokerClient = provide("brokerClient")
+    .using(...)
+    .by((deps, lc) => {
+        const client = await createBrokerClient(deps)
+        /**
+         * Hooking to events inside a resolver.
+         * These hooks will be registered on
+         * each new resolution:
+         */
+        lc.onStart(client => client.start())
+        lc.onStop(client => client.stop())
+        
+        return client
+    })
+    .once()
 
 /**
- * You also can dispose specific cached instance
- * by its cache key.
+ * Hooking to events:
  */
-await $databaseConnection.dispose("key")
+$brokerClient.onStart(() =>
+    console.log("Broker clients start listening")
+)
+$brokerClient.onStop(() =>
+    console.log("Broker clients are being disconnected"
+)
+
+/**
+ * Firing events:
+ */
+await $brokerClient.start()
+await $brokerClient.stop()
+```
+
+We can also dispose all cached instances after calling all stop hooks by passing a flag to the `stop` method.
+```ts
+await $brokerClient.stop(true)
 ```
 
 ### Cloning and isolation
@@ -190,32 +216,7 @@ group.map === {
 
 ### Bulk methods
 
-The group has almost identical API for resolution, disposition, isolation and mocking. The difference is that these operations apply to all providers in a common context, and we cannot pass custom disposers, since a different set of interfaces is possible.
-
-#### Resolution
-```ts
-await group("key", {
-    ttl: ...
-})
-```
-
-#### Disposition
-```ts
-await group.dispose("key")
-```
-
-#### Isolation
-Returns a new group.
-```ts
-// Returns a new group.
-await group.isolate()
-```
-
-#### Mocking
-Returns a new group.
-```ts
-await group.mock(...)
-```
+The group has identical API for resolution, disposition, hooks, isolation and mocking. The difference is that these operations apply to all providers in a common context.
 
 # Reference
 
@@ -261,16 +262,14 @@ Creates a provider.
 - `opts?`: Configuration:
     - `dependencies?`: A list of dependency providers.
     - `resolver?`: A function that creates an instance.
-    - `disposer?`: When this function is set, all instances will be cached with that disposer unless a different lifetime is intentionally set.
     - `defaultCacheKey?`: When this string is set, a first instance will be stored under that key, and all future resolutions will return that entity unless a different key is intentionally specified.
-    - `defaultCacheTTL?`: When this number is set, all instances will be cached with that lifetime unless a different lifetime is intentionally set.
+    - `defaultTTL?`: When this number is set, all instances will be cached with that lifetime unless a different lifetime is intentionally set.
 ```ts
 const $service = createProvider("service", {
     dependencies: [$otherService],
     resolver: createService,
-    disposer: handleServiceDisposition,
     defaultCacheKey: "key",
-    defaultCacheTTL: 1_000
+    defaultTTL: 1_000
 })
 ```
 
@@ -278,7 +277,6 @@ const $service = createProvider("service", {
 const $service = provide("service")
     .using($otherService)
     .by(createService)
-    .withDisposer(handleServiceDisposition)
     .once("main")
     .temporary(1_000)
 ```
@@ -286,17 +284,11 @@ const $service = provide("service")
 ### resolve (object call)
 
 Resolves an instance by calling its resolver with dependencies.
-
-- `cacheKey?`: A key for caching.
-- `cacheOpts?`: Caching options:
-    - `disposer?`: A custom disposer.
-    - `ttl?`: An instance lifetime in milliseconds.
+- `cacheKey?`: A key under which the instance will be cached.
+- `ttl?`: A cached instance lifetime in milliseconds.
 
 ```ts
-const service = await $service("key", {
-    disposer: handleServiceDisposition,
-    ttl: 5_000
-})
+const service = await $service("key", 1_000)
 ```
 
 ### `.id` (property)
@@ -355,10 +347,40 @@ await provider("key1") // cached for 1 second
 await provider("key2", { ttl: 2_000 }) // cached for 2 seconds
 ```
 
+### `.onStart`
+
+Registers a function that will be called on a start event, returning the current provider. The start event is fired when `start` method of the current provider is called.
+- `fn`: A function that will be called on a start event.
+
+```ts
+$service.onStart(fn)
+await $service.start()
+// fn is called
+```
+
+### `.onStop`
+
+Register a function that will be called on a stop event, returning the current provider. The stop event is fired when `.stop` method of the current provider is called.
+- `fn`: A function that will be called on a stop event.
+
+```ts
+$service.onStop(fn)
+await $service.stop()
+// fn is called
+```
+
+### `.start`
+
+Fires a start event, calling all hook functions of this event and returning a promise that will resolve when all hooks have resolved.
+
+### `.stop`
+
+Fires a stop event, calling all hook functions of this event and returning a promise that will resolve when all hooks have resolved. Initiates disposition afterward if `shouldDispose` is `true`.
+- `shouldDispose`: Determines whether to initiate a disposition afterward.
+
 ### `.dispose`
 
-Removes all instances from the cache, calling their disposers. Will attempt to dispose only one entity if a cache key was specified.
-- `cacheKey?`: A cache key of a specific instance.
+Removes all instances from the cache.
 
 ### `.mock`
 
@@ -380,21 +402,17 @@ const $thirdWithMockedFirst = $third
 
 ### `.mount`
 
-Caches an already existing instance under the specified key. If there is already a cached instance under the key, it will be disposed and replaced with a new one.
+Caches an already existing instance under the specified key. If there is already a cached instance under the key, it will be disposed and replaced with a new one. Returns a promise of its resolution.
 - `instance`: An instance to cache.
 - `cacheKey`: A key under which the instance will be cached.
-- `cacheOpts?`: Caching options:
-    - `disposer?`: A custom disposer.
-    - `ttl?`: An instance lifetime in milliseconds.
+- `ttl`: A cached instance lifetime in milliseconds.
 
 ### `.complete`
 
 Resolves remaining dependencies based on the container portion already provided. If there is already a cached instance under the key, it will be disposed and replaced with a new one.
 - `resolvedPart`: Already resolved part of dependency container.
-- `cacheKey?`: A key for caching.
-- `cacheOpts?`: Caching options:
-    - `disposer?`: A custom disposer.
-    - `ttl?`: An instance lifetime in milliseconds.
+- `cacheKey?`: A key under which the instance will be cached.
+- `ttl`: A cached instance lifetime in milliseconds.
 
 ```ts
 const $first = provide("first")
@@ -472,10 +490,9 @@ $allMap.second.id === "second"
 
 ### resolve (object call)
 
-Resolves instances of all providers from a list, producing an instance map. Supports simplified caching for all instances.
+Resolves instances of all providers from a list, producing an instance map. The passed parameters will be applied to every resolution
 - `cacheKey?`: A key under which all instances will be cached.
-- `cacheOpts?`: Caching options:
-    - `ttl?`: An instance lifetime in milliseconds.
+- `ttl?`: A cached instance lifetime in milliseconds.
 
 ```ts
 const $first = provide("first")
@@ -501,10 +518,28 @@ Creates a new group with a modified list of providers, to which new ones have be
 Creates a new group with a modified list of providers, to which providers from another group were added.
 - `group`: A group to be concatenated.
 
+### `.onStart`
+
+Calls `onStart` method of each provider in the list, returning the current group.
+- `fn`: A function that will be called on a start event.
+
+### `.onStart`
+
+Calls `onStop` method of each provider in the list, returning the current group.
+- `fn`: A function that will be called on a stop event.
+
+### `.start`
+
+Calls `start` method of each provider in the list, returning a promise that will resolve when all hooks of all providers have resolved.
+
+### `.stop`
+
+Calls `stop` method of each provider in the list, returning a promise that will resolve when all hooks of all providers have resolved.
+- `shouldDispose?`: Determines whether to initiate a disposition afterward.
+
 ### `.dispose`
 
-Call dispose on all providers from a list.
-- `cacheKey?`: A cache key that will be used in all dispositions.
+Calls `dispose` method of each provider in the list.
 
 ### `.isolate`
 
