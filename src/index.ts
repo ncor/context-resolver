@@ -481,13 +481,15 @@ export const createProvider = <
             disposer,
         });
 
-    const identity = () =>
-        Object.assign(resolve, instanceWithoutCallable) as ProviderType;
-
     const isolate: ProviderType["isolate"] = () =>
-        createProviderCloneResolver()(identity()) as ProviderType;
+        createProviderCloneResolver()(getSelf()) as ProviderType;
 
-    const instanceWithoutCallable: OmitCallSignature<ProviderType> = {
+    let self: ProviderType | undefined;
+
+    const getSelf = () =>
+        self || (self = Object.assign(resolve, properties) as ProviderType);
+
+    const properties: OmitCallSignature<ProviderType> = {
         id,
         dependencies,
         complete,
@@ -505,7 +507,7 @@ export const createProvider = <
         isolate,
     };
 
-    return identity();
+    return getSelf();
 };
 
 export const provide = createProvider;
