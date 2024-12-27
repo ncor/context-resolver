@@ -124,7 +124,7 @@ $brokerClient.onStart(() =>
     console.log("Broker clients start listening")
 )
 $brokerClient.onStop(() =>
-    console.log("Broker clients are being disconnected"
+    console.log("Broker clients are being disconnected")
 )
 
 /**
