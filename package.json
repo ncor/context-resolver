@@ -24,7 +24,8 @@
     "scripts": {
         "build": "npx tsup",
         "test": "pnpx vitest coverage --coverage",
-        "benchmark": "pnpx vitest benchmark"
+        "benchmark": "pnpx vitest benchmark",
+        "publish": "pnpm run build && pnpm publish"
     },
     "author": "ensi",
     "license": "MIT",
