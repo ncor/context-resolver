@@ -1,6 +1,6 @@
 {
     "name": "context-resolver",
-    "version": "0.4.0-beta.1",
+    "version": "0.4.0",
     "description": "A type-safe, async-first context resolution library for IoC/DI and lifecycle management.",
     "repository": {
         "type": "git",
