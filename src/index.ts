@@ -26,7 +26,7 @@ type Unique<T extends readonly any[], Seen = never> = T extends [
 
 const unique = <T extends any[]>(xs: T) => Array.from(new Set(xs)) as T;
 
-type ResolverEventHooksInterface = {
+type ResolverLifecycleInterface = {
     onStart(hook: EventHookFn): void;
     onStop(hook: EventHookFn): void;
 };
@@ -36,7 +36,7 @@ type ResolverEventHooksInterface = {
  */
 type Resolver<C extends Record<string, any>, I, P> = (
     container: C,
-    hooks: ResolverEventHooksInterface,
+    lifecycle: ResolverLifecycleInterface,
 ) => MaybePromise<I>;
 
 type InferProviderInstance<P extends ProviderShape> =
@@ -330,13 +330,13 @@ export const createProvider = <
 
     const eventManager = createEventManager();
 
-    const resolverEventHooksInterface = {
+    const resolveLifecycleInterface = {
         onStart: eventManager.registerStartEventHook,
         onStop: eventManager.registerStopEventHook,
     };
     const resolver = opts?.resolver
         ? async (container: Parameters<typeof opts.resolver>[0]) =>
-              opts.resolver!(container, resolverEventHooksInterface)
+              opts.resolver!(container, resolveLifecycleInterface)
         : makePhonyResolver<Instance>();
 
     const cache = createResolutionCache<Instance>();
