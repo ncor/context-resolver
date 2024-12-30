@@ -26,17 +26,9 @@ type Unique<T extends readonly any[], Seen = never> = T extends [
 
 const unique = <T extends any[]>(xs: T) => Array.from(new Set(xs)) as T;
 
-type ResolverLifecycleInterface = {
-    onStart(hook: EventHookFn): void;
-    onStop(hook: EventHookFn): void;
-};
-
-/**
- * A function that creates an instance.
- */
 type Resolver<C extends Record<string, any>, I, P> = (
     container: C,
-    lifecycle: ResolverLifecycleInterface,
+    lifecycle: Lifecycle,
 ) => MaybePromise<I>;
 
 type InferProviderInstance<P extends ProviderShape> =
@@ -46,8 +38,10 @@ type MapProvidersOutputsById<T extends ProviderShape[]> = {
     [P in T[number] as P["id"]]: InferProviderInstance<P>;
 };
 
+type InstanceCallback<Instance> = (instance: Instance) => any;
+
 /**
- * A structure that creates and stores instances by resolving its dependencies.
+ * Creates instances by resolving its dependencies.
  */
 type Provider<
     Instance,
@@ -56,14 +50,10 @@ type Provider<
 > = {
     /**
      * Resolves an instance by calling its resolver with dependencies.
-     * ```ts
-     * const service = await $service("key", 1_000)
-     * ```
      *
      * @param cacheKey A key under which the instance will be cached.
-     * @param ttl A cached instance lifetime in milliseconds.
      */
-    (cacheKey?: string, ttl?: number): Promise<Instance>;
+    (cacheKey?: string): Promise<Instance>;
     /**
      * Unique identifier.
      */
@@ -72,6 +62,14 @@ type Provider<
      * A list of dependency providers.
      */
     dependencies: Dependencies;
+    /**
+     * Stores and provides resolutions.
+     */
+    cache: ResolutionCache<Instance>;
+    /**
+     * Start and stop event broker.
+     */
+    lifecycle: Lifecycle;
     /**
      * Creates a new provider with a modified unique identifier.
      *
@@ -83,7 +81,7 @@ type Provider<
     /**
      * Creates a new provider with a modified resolver.
      *
-     * @resolver A function that creates an instance.
+     * @param resolver A function that creates an instance.
      */
     by<NewInstance>(
         resolver: Resolver<
@@ -92,20 +90,42 @@ type Provider<
             Provider<NewInstance, Id, Dependencies>
         >,
     ): Provider<NewInstance, Id, Dependencies>;
+    withResolver: Provider<Instance, Id, Dependencies>["by"];
     /**
-     * Creates a new provider with a modified list of dependencies. The provider created by this method must define a new resolver because the set of dependency interfaces changes.
+     * Creates a new provider with a modified list of dependencies.
+     * A provider created by this method must define a new resolver
+     * because this method establishes a new set of provider interfaces.
+     * ```ts
+     * const $standaloneService = provide("standaloneService")
+     *     .by(createStandaloneService)
+     *
+     * const $serviceWithdeps = $standaloneService
+     *     .use($otherService)
+     *     .by(createServiceWithDeps)
+     * ```
+     * In case a resolver is not specified after, it will
+     * return an empty object with an `unknown` type:
+     * ```ts
+     * conts $serviceWithDeps = $standaloneService
+     *     .use($otherService)
+     *
+     * await $serviceWithDeps() === {}
+     * ```
      *
      * @param dependencies A list of dependency providers.
      */
-    using<NewDependencies extends ProviderShape[]>(
-        ...dependencies: NewDependencies
+    use<NewDependencies extends ProviderShape[]>(
+        ...providers: NewDependencies
     ): Provider<Instance, Id, NewDependencies>;
     /**
-     * Creates a new provider with a modified default cache key. When a default cache key is set, a first instance will be stored under that key, and all future resolutions will return that entity unless a different key is intentionally specified.
+     * Creates a new provider with a modified default cache key.
+     * When a default cache key is set, a first instance will be stored
+     * under that key, and all future resolutions will return that entity
+     * unless a different key is intentionally specified.
      * ```ts
      * const $service = provide("service")
      *     .by(createService)
-     *     .once("key")
+     *     .singleton("key")
      *
      * await provider() === await provider()
      * await provider() !== await provider("different")
@@ -113,71 +133,7 @@ type Provider<
      *
      * @param cacheKey Cache key. Defaults to `"singleton"` if not specified.
      */
-    once(cacheKey?: string): Provider<Instance, Id, Dependencies>;
-    /**
-     * Creates a new provider with a modified default cached instance lifetime.
-     * When the cached instance lifetime is set to default, all instances
-     * will be cached with that lifetime unless a different lifetime is
-     * intentionally set.
-     * ```ts
-     * const $service = provide("service")
-     *     .by(createService)
-     *     .temporary(1_000)
-     *
-     * await provider("key1") // cached for 1 second
-     * await provider("key2", { ttl: 2_000 }) // cached for 2 seconds
-     * ```
-     *
-     * @param A cached instance lifetime in milliseconds.
-     */
-    temporary(ttl: number): Provider<Instance, Id, Dependencies>;
-    /**
-     * Registers a function that will be called on a start event,
-     * returning the current provider.
-     * The start event is fired when `.start` method
-     * of the current provider is called.
-     * ```ts
-     * $service.onStart(fn)
-     * await $service.start()
-     * // fn is called
-     * ```
-     *
-     * @param fn A function that will be called on a start event.
-     */
-    onStart(fn: EventHookFn): Provider<Instance, Id, Dependencies>;
-    /**
-     * Registers a function that will be called on a stop event,
-     * returning the current provider.
-     * The stop event is fired when `.stop` method
-     * of the current provider is called.
-     * ```ts
-     * $service.onStop(fn)
-     * await $service.stop()
-     * // fn is called
-     * ```
-     *
-     * @param fn A function that will be called on a stop event.
-     */
-    onStop(fn: EventHookFn): Provider<Instance, Id, Dependencies>;
-    /**
-     * Fires a start event, calling all hook functions of this event
-     * and returning a promise that will resolve when
-     * all hooks have resolved.
-     */
-    start(): Promise<void>;
-    /**
-     * Fires a stop event, calling all hook functions of this event
-     * and returning a promise that will resolve when
-     * all hooks have resolved.
-     * Initiates disposition afterward if `shouldDispose` is `true`.
-     *
-     * @param fn Determines whether to initiate a disposition afterward.
-     */
-    stop(shouldDispose?: boolean): Promise<void>;
-    /**
-     * Removes all instances from the cache.
-     */
-    dispose(): void;
+    singleton(key?: string): Provider<Instance, Id, Dependencies>;
     /**
      * Creates a new provider by replacing dependency providers with compatible
      * mocks, traversing an entire provider context graph.
@@ -186,14 +142,20 @@ type Provider<
      * const $first = provide("first")
      *     .by(createFirst)
      * const $second = provide("second")
-     *     .using($first)
+     *     .use($first)
      *     .by(createSecond)
      * const $third = provide("third")
-     *     .using($second)
+     *     .use($second)
      *     .by(createThird)
      *
+     * const $firstMock = provide("first")
+     *     .by(createFakeFirst)
      * const $thirdWithMockedFirst = $third
-     *     .mock(provide("first").by(createFakeFirst))
+     *     .mock(createFakeFirst)
+     *
+     * $thirdWithMockedFirst
+     *     .dependencies[0] // $second
+     *     .dependencies[0] !== $first
      * ```
      *
      * @param providers A list of mock dependency providers.
@@ -203,48 +165,6 @@ type Provider<
             ? SomeOf<InferContext<Dependencies>>
             : any[]
     ): Provider<Instance, Id, Dependencies>;
-    /**
-     * Caches an already existing instance under the specified key.
-     * If there is already a cached instance under the key,
-     * it will be disposed and replaced with a new one.
-     * Returns a promise of its resolution.
-     *
-     * @param instance An instance to cache.
-     * @param cacheKey A key under which the instance will be cached.
-     * @param ttl A cached instance lifetime in milliseconds.
-     */
-    mount(
-        instance: Instance,
-        cacheKey: string,
-        ttl?: number,
-    ): Promise<Instance>;
-    /**
-     * Resolves remaining dependencies based on the container portion
-     * already provided. If there is already a cached instance
-     * under the key, it will be disposed and replaced with a new one.
-     * ```ts
-     * const $first = provide("first")
-     *     .by(createFirst)
-     * const $second = provide("second")
-     *     .by(createSecond)
-     * const $third = provide("third")
-     *     .using($first, $second)
-     *     .by(createThird)
-     *
-     * cosnt third = await $service.complete(
-     *     { first: createFirst(...) }
-     * )
-     * ```
-     *
-     * @param resolvedPart Already resolved part of dependency container.
-     * @param cacheKey A key under which the instance will be cached.
-     * @param ttl A cached instance lifetime in milliseconds.
-     */
-    complete(
-        resolvedPart: Partial<MapProvidersOutputsById<Dependencies>>,
-        cacheKey?: string,
-        ttl?: number,
-    ): Promise<Instance>;
     /**
      * Creates a new provider with the same properties as an original.
      */
@@ -256,22 +176,54 @@ type Provider<
      * const $first = provide("first")
      *     .by(createFirst)
      * const $second = provide("second")
-     *     .using($first)
+     *     .use($first)
      *     .by(createSecond)
      *
      * const $isolatedSecond = $second.isolate()
      *
      * $isolatedSecond !== $second
-     * $isolatedSecond.dependencies[0].id !== $first
+     * $isolatedSecond.dependencies[0] !== $first
      * ```
      */
     isolate(): Provider<Instance, Id, Dependencies>;
     /**
-     * Returns debugging information.
+     * Registers a callback that will be called with each resolved instance.
+     * ```ts
+     * $broker.onEach(broker => {
+     *     $broker.lifetime.onStart(() => broker.listen())
+     *     $broker.lifetime.onStop(() => broker.stop())
+     * })
+     * ```
+     *
+     * @param callback A function that will be called with each resolved instance.
      */
-    inspect(): {
-        cache: ResolutionCache<Instance>;
-    };
+    onEach(
+        callback: InstanceCallback<Instance>,
+    ): Provider<Instance, Id, Dependencies>;
+    /**
+     * Resolves remaining dependencies based on the container portion
+     * already provided.
+     * ```ts
+     * const $first = provide("first")
+     *     .by(createFirst)
+     * const $second = provide("second")
+     *     .by(createSecond)
+     * const $third = provide("third")
+     *     .use($first, $second)
+     *     .by(createThird)
+     *
+     * const third = await $third.complete(
+     *     { first: createFirst(...) }
+     * )
+     * ```
+     *
+     * @param resolvedPart Already resolved part of dependency container.
+     * @param cacheKey A key under which the instance will be cached.
+     */
+    complete(
+        resolvedPart: Partial<MapProvidersOutputsById<Dependencies>>,
+        cacheKey?: string,
+    ): Promise<Instance>;
 };
 
 type ProviderShape = Provider<any, string, any[]>;
@@ -281,9 +233,25 @@ const makePhonyResolver =
     () =>
         Promise.resolve({} as Instance);
 
+export const defaultCacheKey = "_singleton";
+
 /**
- * Creates a provider, a structure that creates and stores instances
+ * Creates a provider, a structure that creates instances
  * by resolving its dependencies.
+ * ```ts
+ * const $service = createProvider("service", {
+ *     dependencies: [$otherService],
+ *     resolver: createService,
+ *     defaultCache: "key"
+ * })
+ * ```
+ * With `provide` and builder methods:
+ * ```ts
+ * const $service = provide("service")
+ *     .use($otherService)
+ *     .by(createService)
+ *     .singleton("key")
+ * ```
  *
  * @param id Unique identifier.
  * @param opts Configuration.
@@ -319,67 +287,58 @@ export const createProvider = <
          * that entity unless a different key is intentionally specified.
          */
         defaultCacheKey?: string;
-        /**
-         * When this number is set, all instances will be cached with that
-         * lifetime unless a different lifetime is intentionally set.
-         */
-        defaultTTL?: number;
     },
-) => {
+): Provider<Instance, Id, Dependencies> => {
     type ProviderType = Provider<Instance, Id, Dependencies>;
 
-    const eventManager = createEventManager();
+    const cache = createResolutionCache<Instance>();
+    const lifecycle = createLifecycle();
 
-    const resolveLifecycleInterface = {
-        onStart: eventManager.registerStartEventHook,
-        onStop: eventManager.registerStopEventHook,
-    };
     const resolver = opts?.resolver
-        ? async (container: Parameters<typeof opts.resolver>[0]) =>
-              opts.resolver!(container, resolveLifecycleInterface)
+        ? async (
+              container: Parameters<typeof opts.resolver>[0],
+              lifecycle: Lifecycle,
+          ) => opts.resolver!(container, lifecycle)
         : makePhonyResolver<Instance>();
 
-    const cache = createResolutionCache<Instance>();
     const defaultCacheKey = opts?.defaultCacheKey;
-    const defaultTTL = opts?.defaultTTL;
 
     const dependencies = (
         opts?.dependencies ? unique(opts.dependencies) : []
     ) as Dependencies;
-    const container = group(...dependencies);
-    const resolveWithDependencies = async () => resolver(await container());
+    const container = select(...dependencies);
 
-    const cacheResolution = (
-        key: string,
-        resolution: Promise<Instance>,
-        ttl?: number,
-    ) =>
-        cache.set({
-            key,
-            resolution,
-            ttl: ttl || defaultTTL,
-        });
+    const resolveWithDependencies = async () =>
+        resolver(await container(), lifecycle);
 
-    const resolve: InferCallSignature<ProviderType> = async (cacheKey, ttl) => {
+    const instanceCallbacks: InstanceCallback<Instance>[] = [];
+
+    const resolve: InferCallSignature<ProviderType> = async (cacheKey) => {
         cacheKey ??= defaultCacheKey;
 
-        if (cacheKey) {
-            const cachedResolution = cache.get(cacheKey);
-            if (cachedResolution) return cachedResolution.resolution;
+        let resolution = cacheKey && cache.get(cacheKey)?.resolution;
 
-            const resolution = resolveWithDependencies();
-            cacheResolution(cacheKey, resolution, ttl);
-
-            return resolution;
+        if (!resolution) {
+            resolution = resolveWithDependencies();
+            if (cacheKey) cache.set(cacheKey, resolution);
         }
 
-        return resolveWithDependencies();
+        instanceCallbacks.forEach(async (callback) =>
+            callback(await resolution),
+        );
+
+        return resolution;
+    };
+
+    const onEach: ProviderType["onEach"] = (callback) => {
+        instanceCallbacks.push(callback);
+
+        return getSelf();
     };
 
     const complete: ProviderType["complete"] = async (
         resolvedPart,
         cacheKey,
-        ttl,
     ) => {
         cacheKey ??= defaultCacheKey;
 
@@ -387,36 +346,22 @@ export const createProvider = <
         const missingDependencies = dependencies.filter(
             (p) => !resolvedDepedencyIds.includes(p.id),
         );
-        const missingPart = await group(...missingDependencies)();
-        const resolution = resolver({
-            ...resolvedPart,
-            ...missingPart,
-        });
+        const missingPart = await select(...missingDependencies)();
+        const resolution = resolver(
+            {
+                ...resolvedPart,
+                ...missingPart,
+            },
+            lifecycle,
+        );
 
-        if (cacheKey) {
-            await cache.get(cacheKey)?.dispose();
-            cacheResolution(cacheKey, resolution, ttl);
-        }
-
-        return resolution;
-    };
-
-    const mount: ProviderType["mount"] = (instance, cacheKey, ttl) => {
-        cache.get(cacheKey)?.dispose();
-
-        const resolution = Promise.resolve(instance);
-        cacheResolution(cacheKey, resolution, ttl);
+        if (cacheKey) cache.set(cacheKey, resolution);
 
         return resolution;
     };
-
-    const inspect: ProviderType["inspect"] = () => ({
-        cache,
-    });
 
     const optsToSave = {
         defaultCacheKey,
-        defaultTTL,
     };
 
     const as: ProviderType["as"] = (id) =>
@@ -433,56 +378,18 @@ export const createProvider = <
             resolver,
         });
 
-    const using: ProviderType["using"] = (...dependencies) =>
+    const use: ProviderType["use"] = (...dependencies) =>
         createProvider(id, {
             ...optsToSave,
             dependencies,
         });
 
-    const onStart: ProviderType["onStart"] = (hook) => {
-        eventManager.registerStartEventHook(hook);
-
-        return getSelf();
-    };
-
-    const onStop: ProviderType["onStop"] = (hook) => {
-        eventManager.registerStopEventHook(hook);
-
-        return getSelf();
-    };
-
-    const start: ProviderType["stop"] = eventManager.fireStartEvent;
-
-    const stop: ProviderType["stop"] = async (shouldDispose) => {
-        await eventManager.fireStopEvent();
-        if (shouldDispose) dispose();
-    };
-
-    const dispose: ProviderType["dispose"] = () => {
-        for (const resolution of cache.all()) resolution.dispose();
-    };
-
-    const once: ProviderType["once"] = (cacheKey) =>
+    const singleton: ProviderType["singleton"] = (cacheKey) =>
         createProvider(id, {
             ...optsToSave,
             dependencies,
             resolver,
-            defaultCacheKey: cacheKey || SINGLETON_CACHE_KEY,
-        });
-
-    const temporary: ProviderType["temporary"] = (ttl) =>
-        createProvider(id, {
-            ...optsToSave,
-            dependencies,
-            resolver,
-            defaultTTL: ttl,
-        });
-
-    const clone: ProviderType["clone"] = () =>
-        createProvider(id, {
-            ...optsToSave,
-            dependencies,
-            resolver,
+            defaultCacheKey: cacheKey || defaultCacheKey,
         });
 
     const mock: ProviderType["mock"] = (...mockProviders) =>
@@ -498,6 +405,13 @@ export const createProvider = <
             resolver,
         });
 
+    const clone: ProviderType["clone"] = () =>
+        createProvider(id, {
+            ...optsToSave,
+            dependencies,
+            resolver,
+        });
+
     const isolate: ProviderType["isolate"] = () =>
         createProviderCloneResolver()(getSelf()) as ProviderType;
 
@@ -509,26 +423,20 @@ export const createProvider = <
     const properties: OmitCallSignature<ProviderType> = {
         id,
         dependencies,
+        cache,
+        lifecycle,
 
         as,
         by,
-        using,
-        once,
-        temporary,
+        withResolver: by,
+        use,
+        singleton,
 
-        onStart,
-        onStop,
-        start,
-        stop,
-        dispose,
-
+        onEach,
         mock,
-        mount,
         complete,
         clone,
         isolate,
-
-        inspect,
     };
 
     return getSelf();
@@ -540,107 +448,150 @@ type Disposer = () => void;
 
 type CachedResolution<Instance> = {
     resolution: Promise<Instance>;
-    disposeTimer?: NodeJS.Timeout;
     dispose: Disposer;
 };
 
-const SINGLETON_CACHE_KEY = "singleton";
+/**
+ * Stores and provides resolutions.
+ */
+type ResolutionCache<Instance> = {
+    /**
+     * Cache.
+     */
+    map: Map<string, CachedResolution<Instance>>;
+    /**
+     * Retrieves a possibly existing resolution from the cache.
+     *
+     * @param key A key of cached resolution.
+     */
+    get(key: string): CachedResolution<Instance> | undefined;
+    /**
+     * Saves a resolution in the cache.
+     *
+     * @param key A key under which the instance will be saved.
+     * @param resolution A promise of an instance.
+     */
+    set(key: string, resolution: Promise<Instance>): void;
+    /**
+     * Retrieves all existing resolutions from the map.
+     */
+    all(): CachedResolution<Instance>[];
+    /**
+     * Removes all resolutions from the cache.
+     * Tries to remove one if key parameter is provided.
+     *
+     * @param A key of cached resolution.
+     */
+    dispose(key?: string): void;
+};
 
 const createCachedResolution = <Instance>(opts: {
     resolution: Promise<Instance>;
     disposer: Disposer;
-    ttl?: number;
 }): CachedResolution<Instance> => {
-    let disposeTimer: NodeJS.Timeout | undefined;
-
-    const stopDisposeTimer = () =>
-        (disposeTimer &&= void clearTimeout(disposeTimer));
-
-    if (opts.ttl) disposeTimer = setTimeout(opts.disposer, opts.ttl);
-
     return {
         resolution: opts.resolution,
-        disposeTimer,
         dispose() {
-            stopDisposeTimer();
             opts.disposer();
         },
     };
 };
 
-type ResolutionCache<Instance> = {
-    map: Map<string, CachedResolution<Instance>>;
-    get(key: string): CachedResolution<Instance> | undefined;
-    set(opts: {
-        key: string;
-        resolution: Promise<Instance>;
-        ttl?: number;
-    }): void;
-    all(): CachedResolution<Instance>[];
-};
-
 const createResolutionCache = <Instance>(): ResolutionCache<Instance> => {
+    type CacheType = ResolutionCache<Instance>;
+
     const map = new Map<string, CachedResolution<Instance>>();
 
     const makeDisposer = (keyToDelete: string) => () => map.delete(keyToDelete);
 
+    const get: CacheType["get"] = (key) => map.get(key);
+
+    const set: CacheType["set"] = (key, resolution) => {
+        const cachedResolution = createCachedResolution({
+            resolution,
+            disposer: makeDisposer(key),
+        });
+
+        map.set(key, cachedResolution);
+    };
+
+    const all: CacheType["all"] = () => {
+        return Array.from(map.values());
+    };
+
+    const dispose: CacheType["dispose"] = (key) => {
+        if (key) return get(key)?.dispose();
+        for (const resolution of all()) resolution.dispose();
+    };
+
     return {
         map,
-        get(key) {
-            return map.get(key);
-        },
-        set(opts) {
-            const cachedResolution = createCachedResolution({
-                ...opts,
-                disposer: makeDisposer(opts.key),
-            });
-
-            map.set(opts.key, cachedResolution);
-        },
-        all() {
-            return Array.from(map.values());
-        },
+        get,
+        set,
+        all,
+        dispose,
     };
 };
 
-type EventHookFn = () => MaybePromise<any>;
+type EventListenerFn = () => MaybePromise<any>;
 
-type EventManager = {
-    startEventHooks: EventHookFn[];
-    stopEventHooks: EventHookFn[];
-    registerStartEventHook(hook: EventHookFn): void;
-    registerStopEventHook(hook: EventHookFn): void;
-    fireStartEvent(): Promise<void>;
-    fireStopEvent(): Promise<void>;
+/**
+ * Start and stop event broker.
+ */
+type Lifecycle = {
+    /**
+     * A list of start event listeners.
+     */
+    startEventListeners: EventListenerFn[];
+    /**
+     * A list of stop event listeners.
+     */
+    stopEventListeners: EventListenerFn[];
+    /**
+     * Registers a listener for each start event.
+     *
+     * @param listener A function that will be called on start event.
+     */
+    onStart(listener: EventListenerFn): void;
+    /**
+     * Registers a listener for each stop event.
+     */
+    onStop(listener: EventListenerFn): void;
+    /**
+     * Fires a start event, calling all start event listeners.
+     */
+    start(): Promise<void>;
+    /**
+     * Fires a stop event, calling all stop event listeners.
+     */
+    stop(): Promise<void>;
 };
 
-const createEventManager = () => {
-    const startEventHooks: EventHookFn[] = [];
-    const stopEventHooks: EventHookFn[] = [];
+const createLifecycle = (): Lifecycle => {
+    const startEventListeners: EventListenerFn[] = [];
+    const stopEventListeners: EventListenerFn[] = [];
 
-    const registerStartEventHook: EventManager["registerStartEventHook"] = (
-        hook,
-    ) => startEventHooks.push(hook);
+    const onStart: Lifecycle["onStart"] = (listener) =>
+        startEventListeners.push(listener);
 
-    const registerStopEventHook: EventManager["registerStopEventHook"] = (
-        hook,
-    ) => stopEventHooks.push(hook);
+    const onStop: Lifecycle["onStop"] = (listener) =>
+        stopEventListeners.push(listener);
 
-    const fireStartEvent: EventManager["fireStartEvent"] = async () => {
-        await Promise.all(startEventHooks.map((hook) => hook()));
+    const start: Lifecycle["start"] = async () => {
+        await Promise.all(startEventListeners.map((hook) => hook()));
     };
 
-    const fireStopEvent: EventManager["fireStartEvent"] = async () => {
-        await Promise.all(stopEventHooks.map((hook) => hook()));
+    const stop: Lifecycle["start"] = async () => {
+        await Promise.all(stopEventListeners.map((hook) => hook()));
     };
 
     return {
-        startEventHooks,
-        stopEventHooks,
-        registerStartEventHook,
-        registerStopEventHook,
-        fireStartEvent,
-        fireStopEvent,
+        startEventListeners,
+        stopEventListeners,
+        onStart,
+        onStop,
+        start,
+        stop,
     };
 };
 
@@ -692,129 +643,96 @@ type MapProvidersById<T extends ProviderShape[]> = {
     [P in T[number] as P["id"]]: P;
 };
 
+type InstanceMapCallback<InstanceMap> = (map: InstanceMap) => any;
+
 /**
- * A set of providers grouped together into a common context.
+ * Typed set of providers grouped together into a common context.
  */
-type ProviderGroup<Providers extends ProviderShape[]> = {
+type ProviderSelection<Providers extends ProviderShape[]> = {
     /**
      * Resolves instances of all providers from a list, producing an instance map.
      * The passed parameters will be applied to every resolution.
      * ```ts
-     * const $first = provide("first")
-     *     .by(createFirst)
-     * const $second = provide("second")
-     *     .by(createSecond)
+     * const $all = select($first, $second, $third)
+     * const all = $all()
      *
-     * const all = group($first, $second)()
-     *
-     * all === {
-     *     first: ..., // instance of the first
-     *     second: ... // intance of the second
+     * all == {
+     *     first: ...,
+     *     second: ...,
+     *     third: ...
      * }
      * ```
      *
      * @param cacheKey A key under which all instances will be cached.
-     * @param ttl A cached instance lifetime in milliseconds.
      */
-    (
-        cacheKey?: string,
-        ttl?: number,
-    ): Promise<MapProvidersOutputsById<Providers>>;
+    (cacheKey?: string): Promise<MapProvidersOutputsById<Providers>>;
     /**
      * A list of providers.
      */
     list: Providers;
     /**
-     * A map of providers.
-     * ```ts
-     * const $first = provide("first")
-     *     .by(createFirst)
-     * const $second = provide("second")
-     *     .by(createSecond)
-     *
-     * const $allMap = group($first, $second).map
-     *
-     * $allMap.first.id === "first"
-     * $allMap.second.id === "second"
-     * ```
+     * A map of providers by their unique identifier.
      */
     map: Prettify<MapProvidersById<Providers>>;
     /**
-     * Creates a new group with a modified list of providers, to which new ones have been added.
+     * Start and stop event broker.
+     * Each start and stop event will trigger the same event
+     * in each provider from the list.
+     */
+    lifecycle: Lifecycle;
+    /**
+     * Registers a callback that will be called with each resolved instance map.
+     * ```ts
+     * $all.onEach(all => {
+     *     $second.lifecycle.onStart(() =>
+     *         console.log(all.second, "started with", all.first)
+     *     )
+     *     $third.lifecycle.onStart(() =>
+     *         console.log(all.third, "started with", all.first)
+     *     )
+     * })
+     * ```
      *
-     * @param providers A list of providers to add.
+     * @param callback A function that will be called with each
+     * resolved instance map.
      */
-    add<AddedProviders extends ProviderShape[]>(
-        ...providers: AddedProviders
-    ): ProviderGroup<[...Providers, ...AddedProviders]>;
+    onEach(
+        callback: InstanceMapCallback<MapProvidersOutputsById<Providers>>,
+    ): ProviderSelection<Providers>;
     /**
-     * Creates a new group with a modified list of providers, to which providers from another group were added.
+     * Calls `dispose` method of each provider cache in the list.
      *
-     * @param group A group to be concatenated.
+     * @param key A cached instance key.
      */
-    concat<OtherProviders extends ProviderShape[]>(
-        group: ProviderGroup<OtherProviders>,
-    ): ProviderGroup<[...Providers, ...OtherProviders]>;
+    disposeEachCache(key?: string): void;
     /**
-     * Calls `onStart` method of each provider in the list,
-     * returning the current group.
-     *
-     * @param fn A function that will be called on a start event.
-     */
-    onStart(fn: EventHookFn): ProviderGroup<Providers>;
-    /**
-     * Calls `onStop` method of each provider in the list,
-     * returning the current group.
-     *
-     * @param fn A function that will be called on a stop event.
-     */
-    onStop(fn: EventHookFn): ProviderGroup<Providers>;
-    /**
-     * Calls `start` method of each provider in the list,
-     * returning a promise that will resolve when all
-     * hooks of all providers have resolved.
-     */
-    start(): Promise<void>;
-    /**
-     * Calls `stop` method of each provider in the list,
-     * returning a promise that will resolve when all
-     * hooks of all providers have resolved.
-     *
-     * @param shouldDispose Determines whether to initiate a disposition afterward.
-     */
-    stop(shouldDispose?: boolean): Promise<void>;
-    /**
-     * Calls `dispose` method of each provider in the list.
-     */
-    dispose(): void;
-    /**
-     * Clones a known graph into an identical one, returning a group
+     * Clones a known graph into an identical one, returning a selection
      * with the same set of interfaces.
      * ```ts
      * const $first = provide("first")
      *     .by(createFirst)
      * const $second = provide("second")
-     *     .using($first)
+     *     .use($first)
      *     .by(createSecond)
      * const $third = provide("third")
-     *     .using($first)
+     *     .use($first)
      *     .by(createThird)
      *
-     * const $allIsolated = group($first, $second, $third).isolate()
+     * const $all = select($first, $second, $third)
+     * const $allIsolated = $all.isolate()
      *
      * Object.is(
-     *     $allIsolated.$second.dependencies[0],
-     *     $allIsolated.$third.dependencies[0]
+     *     $allIsolated.map.$second.dependencies[0],
+     *     $allIsolated.map.$third.dependencies[0]
      * ) === true
-     * // the same thing with just `group($second, $third)`
+     * // the same thing with just `select($second, $third)`
      * ```
      */
-    isolate(): ProviderGroup<Providers>;
+    isolate(): ProviderSelection<Providers>;
     /**
-     * Creates a new group by replacing dependency providers with
+     * Creates a new selection by replacing dependency providers with
      * compatible mocks, traversing an entire available graph.
      * A replaced provider is identified by a unique identifier.
-     *
      * ```ts
      * const $first = provide("first")
      *     .by(createFirst)
@@ -825,34 +743,35 @@ type ProviderGroup<Providers extends ProviderShape[]> = {
      *     .using($first)
      *     .by(createThird)
      *
-     * const $all = group($first, $second, $third)
-     * const $allWithMockedFirst = $all.mock(
-     *     provide("first").by(createFakeFirst)
-     * )
-     * const $mockedFirst = $allWithMockedFirst.map.first
+     * const $firstMock = provide("first")
+     *     .by(createFakeFirst)
      *
-     * $mockedfirst !== $first
-     * $allWithMockedFirst.map.second.dependencies[0] === $mockedFirst
-     * $allWithMockedFirst.map.third.dependencies[0] === $mockedFirst
+     * const $all = select($first, $second, $third)
+     * const $allWithMockedFirst = $all
+     *     .mock($firstMock)
+     *
+     * $allWithMockedFirst.map.first === $firstMock
+     * $allWithMockedFirst.map.second.dependencies[0] === $firstMock
+     * $allWithMockedFirst.map.third.dependencies[0] === $firstMock
      * ```
      *
      * @param providers A list of mock dependency providers.
      */
     mock(
         ...providers: SomeOf<InferContext<Providers>>
-    ): ProviderGroup<Providers>;
+    ): ProviderSelection<Providers>;
 };
 
 /**
- * Creates a provider group, a set of providers
+ * Creates a provider selection, typed set of providers
  * grouped together into a common context.
  *
- * @param providers A list of providers to group.
+ * @param providers A list of providers to select.
  */
-const createGroup = <Providers extends ProviderShape[]>(
+const createSelection = <Providers extends ProviderShape[]>(
     ...providers: Providers
-) => {
-    type GroupType = ProviderGroup<Providers>;
+): ProviderSelection<Providers> => {
+    type SelectionType = ProviderSelection<Providers>;
 
     const list = unique(providers);
 
@@ -860,76 +779,65 @@ const createGroup = <Providers extends ProviderShape[]>(
         providers.map((p) => [p.id, p]),
     ) as MapProvidersById<Providers>;
 
-    const build: InferCallSignature<GroupType> = async (cacheKey, opts) =>
-        Object.fromEntries(
-            await Promise.all(
-                list.map(async (p) => [p.id, await p(cacheKey, opts)]),
-            ),
+    const lifecycle = createLifecycle();
+
+    lifecycle.onStart(() => list.forEach((p) => p.lifecycle.start()));
+    lifecycle.onStop(() => list.forEach((p) => p.lifecycle.stop()));
+
+    const instanceMapCallbacks: InstanceCallback<
+        MapProvidersOutputsById<Providers>
+    >[] = [];
+
+    const build: InferCallSignature<SelectionType> = async (cacheKey) => {
+        const instanceMap = Object.fromEntries(
+            await Promise.all(list.map(async (p) => [p.id, await p(cacheKey)])),
         );
 
-    const onStart: GroupType["onStart"] = (hook) => {
-        for (const provider of providers) provider.onStart(hook);
+        instanceMapCallbacks.forEach((callback) => callback(instanceMap));
+
+        return instanceMap;
+    };
+
+    const onEach: SelectionType["onEach"] = (callback) => {
+        instanceMapCallbacks.push(callback);
 
         return getSelf();
     };
 
-    const onStop: GroupType["onStop"] = (hook) => {
-        for (const provider of providers) provider.onStop(hook);
-
-        return getSelf();
+    const disposeEachCache: SelectionType["disposeEachCache"] = (key) => {
+        for (const provider of providers) provider.cache.dispose(key);
     };
 
-    const start: GroupType["start"] = async () => {
-        for (const provider of providers) await provider.start();
-    };
-
-    const stop: GroupType["stop"] = async () => {
-        for (const provider of providers) await provider.stop();
-    };
-
-    const dispose: GroupType["dispose"] = () => {
-        for (const provider of providers) provider.dispose();
-    };
-
-    const add: GroupType["add"] = (...providers) =>
-        createGroup(...list, ...providers);
-
-    const concat: GroupType["concat"] = (group) =>
-        createGroup(...list, ...group.list);
-
-    const isolate: GroupType["isolate"] = () => {
+    const isolate: SelectionType["isolate"] = () => {
         const resolveClone = createProviderCloneResolver();
 
-        return createGroup(...(list.map(resolveClone) as Providers));
+        return createSelection(...(list.map(resolveClone) as Providers));
     };
 
-    const mock: GroupType["mock"] = (...mockProviders) => {
+    const mock: SelectionType["mock"] = (...mockProviders) => {
         const mockMap = Object.fromEntries(
             mockProviders.map((p: any) => [p.id, p]),
         );
 
-        return createGroup(
+        return createSelection(
             ...(list.map(createProviderMockResolver(mockMap)) as Providers),
         );
     };
 
-    let self: GroupType | undefined;
+    let self: SelectionType | undefined;
 
     const getSelf = () =>
-        self || (self = Object.assign(build, properties) as GroupType);
+        self || (self = Object.assign(build, properties) as SelectionType);
 
-    const properties: OmitCallSignature<GroupType> = {
+    const properties: OmitCallSignature<SelectionType> = {
         list,
         get map() {
             return map as Prettify<MapProvidersById<Providers>>;
         },
-        add,
-        concat,
-        onStart,
-        onStop,
-        start,
-        stop,
-        dispose,
+        lifecycle,
+
+        onEach,
+        disposeEachCache,
         isolate,
         mock,
     };
@@ -937,4 +845,81 @@ const createGroup = <Providers extends ProviderShape[]>(
     return getSelf();
 };
 
-export const group = createGroup;
+export const select = createSelection;
+
+/**
+ * Untyped set of providers for global distribution of
+ * lifecycle events and cache disposition.
+ */
+type ProviderScope = {
+    /**
+     * A list of registered providers.
+     */
+    providers: ProviderShape[];
+    /**
+     * Start and stop event broker.
+     * Each start and stop event will trigger the same event
+     * in each provider in the list.
+     */
+    lifecycle: Lifecycle;
+    /**
+     * Adds providers to the list.
+     * Returns a provider if there was only one in a list,
+     * otherwise returns a selection of providers in the list.
+     *
+     * @param providers A list of providers to add.
+     */
+    add<Providers extends ProviderShape[]>(
+        ...providers: Providers
+    ): Providers extends [infer ProviderType]
+        ? ProviderType
+        : ProviderSelection<Providers>;
+    /**
+     * Calls `dispose` method of each provider cache in the scope.
+     *
+     * @param key A cached instance key.
+     */
+    disposeEachCache(key?: string): void;
+};
+
+/**
+ * Creates a provider scope, untyped set of providers for
+ * global distribution of lifecycle events and cache disposition.
+ *
+ * @param providers A list of predefined providers.
+ */
+export const createScope = (...providers: ProviderShape[]) => {
+    const lifecycle = createLifecycle();
+
+    const add: ProviderScope["add"] = <Providers extends ProviderShape[]>(
+        ...providersToAdd: Providers
+    ) => {
+        providers.push(...providersToAdd);
+
+        providersToAdd.forEach((provider) => {
+            lifecycle.onStart(() => provider.lifecycle.start());
+            lifecycle.onStart(() => provider.lifecycle.stop());
+        });
+
+        return (
+            providersToAdd.length === 1
+                ? providersToAdd[0]
+                : select(...providersToAdd)
+        ) as Providers extends [infer ProviderType]
+            ? ProviderType
+            : ProviderSelection<Providers>;
+    };
+
+    const disposeEachCache: ProviderScope["disposeEachCache"] = (key) => {
+        for (const provider of providers) provider.cache.dispose(key);
+    };
+
+    return {
+        providers,
+        lifecycle,
+        add,
+        disposeEachCache,
+    };
+};
+
+export const scope = createScope;
