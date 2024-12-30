@@ -1,450 +1,629 @@
-import { group, provide } from "../src";
-import { describe, expect, it, vi } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { provide, select, scope } from "../src";
 
-describe("single provider", () => {
-    it("should create", async () => {
-        const $i = provide("p");
-        const o = await $i();
+describe("provider", () => {
+    describe("creation", () => {
+        it("should create", () => {
+            const $first = provide("fist");
 
-        expect(o).toStrictEqual({});
+            expect($first).not.toBe(undefined);
+        });
+
+        it("should create with configuration as parameter", () => {
+            const $first = provide("first", {
+                resolver: () => "first",
+            });
+
+            const $second = provide("second", {
+                dependencies: [$first],
+                resolver: () => "second",
+                defaultCacheKey: "key",
+            });
+
+            expect($second).not.toBe(undefined);
+        });
+
+        it("should create with builder methods", () => {
+            const $first = provide("first", {
+                resolver: () => "first",
+            });
+
+            const $second = $first
+                .as("second")
+                .use($first)
+                .by(() => "second")
+                .singleton();
+
+            expect($second).not.toBe(undefined);
+        });
     });
 
-    it("should rename", async () => {
-        const $a = provide("a");
-        const $b = $a.as("b");
+    describe("resolution", () => {
+        it("should resolve an empty object without resolver", async () => {
+            const $first = provide("fist");
 
-        expect($b.id).toBe("b");
+            const first = await $first();
+
+            expect(first).toStrictEqual({});
+        });
+
+        it("should resolve without dependencies", async () => {
+            const $first = provide("first").by(() => "first");
+
+            const first = await $first();
+
+            expect(first).toBe("first");
+        });
+
+        it("should resolve with dependencies", async () => {
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second")
+                .use($first)
+                .by((deps) => deps.first + "second");
+
+            const second = await $second();
+
+            expect(second).toBe("firstsecond");
+        });
+
+        it("should complete", async () => {
+            const firstResolver = vi.fn(() => "first");
+
+            const $first = provide("first").by(firstResolver);
+            const $second = provide("second")
+                .use($first)
+                .by((deps) => deps.first + "second");
+
+            const second = await $second.complete({
+                first: "FIRST",
+            });
+
+            expect(second).toBe("FIRSTsecond");
+            expect(firstResolver).toBeCalledTimes(0);
+        });
     });
 
-    it("should resolve", async () => {
-        const $i = provide("i").by(() => "i");
-        const i = await $i();
+    describe("cache", () => {
+        it("should cache by resolution", async () => {
+            const $first = provide("first").by(() => "first");
 
-        expect(i).toBe("i");
+            await $first("key");
+
+            expect(await $first.cache.get("key")?.resolution).toBe("first");
+        });
+
+        it("should cache by set", async () => {
+            const $first = provide("first").by(() => "first");
+
+            $first.cache.set("key", Promise.resolve("first"));
+
+            expect(await $first.cache.get("key")?.resolution).toBe("first");
+        });
+
+        it("should dispose all", async () => {
+            const $first = provide("first").by(() => "first");
+
+            await $first("key");
+            await $first("lock");
+            $first.cache.dispose();
+
+            expect($first.cache.get("key")).toBe(undefined);
+            expect($first.cache.get("lock")).toBe(undefined);
+        });
+
+        it("should dispose one", async () => {
+            const $first = provide("first").by(() => "first");
+
+            await $first("key");
+            await $first("lock");
+            $first.cache.dispose("key");
+
+            expect($first.cache.get("key")).toBe(undefined);
+            expect($first.cache.get("lock")).not.toBe(undefined);
+        });
+
+        it("should return all", async () => {
+            const $first = provide("first").by(() => "first");
+
+            await $first("key");
+            await $first("lock");
+
+            const allCachedInstances = await Promise.all(
+                $first.cache.all().map(async (c) => await c.resolution),
+            );
+
+            expect(allCachedInstances).toStrictEqual(["first", "first"]);
+        });
+
+        it("should use or override default cache key", async () => {
+            const $first = provide("first")
+                .by(() => ({}))
+                .singleton("key");
+
+            const first1 = await $first();
+            const first2 = await $first();
+            const first3 = await $first("different");
+
+            expect(first1).toBe(first2);
+            expect(first3).not.toBe(first1);
+            expect(Array.from($first.cache.map.keys())).toStrictEqual([
+                "key",
+                "different",
+            ]);
+        });
+
+        it("should complete and cache", async () => {
+            const firstResolver = vi.fn(() => "first");
+
+            const $first = provide("first").by(firstResolver);
+            const $second = provide("second")
+                .use($first)
+                .by((deps) => deps.first + "second");
+
+            const second = await $second.complete(
+                {
+                    first: "FIRST",
+                },
+                "key",
+            );
+
+            expect(second).toBe("FIRSTsecond");
+            expect(firstResolver).toBeCalledTimes(0);
+            expect(await $second.cache.get("key")?.resolution).toBe(
+                "FIRSTsecond",
+            );
+        });
     });
 
-    it("should cache", async () => {
-        const $i = provide("i").by(() => "i");
-        const i = await $i("key");
+    describe("mocking", () => {
+        it("should mock direct dependencies", async () => {
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second").by(() => "second");
+            const $third = provide("third")
+                .use($first, $second)
+                .by((deps) => deps.first + deps.second + "third");
 
-        expect(i).not.toBe(undefined);
-        expect(await $i("key")).toBe(i);
+            const $firstMock = provide("first").by(() => "firstMock");
+            const $secondMock = provide("second").by(() => "secondMock");
+
+            const $thirdWithMocks = $third.mock($firstMock, $secondMock);
+            const thirdWithMocks = await $thirdWithMocks();
+
+            expect($thirdWithMocks.dependencies[0]).toBe($firstMock);
+            expect($thirdWithMocks.dependencies[1]).toBe($secondMock);
+            expect(thirdWithMocks).toBe("firstMocksecondMockthird");
+        });
+
+        it("should mock transitive dependencies", async () => {
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second")
+                .use($first)
+                .by((deps) => deps.first + "second");
+            const $third = provide("third")
+                .use($second)
+                .by((deps) => deps.second + "third");
+
+            const $firstMock = provide("first").by(() => "firstMock");
+
+            const $thirdWithMocks = $third.mock($firstMock);
+            const thirdWithMocks = await $thirdWithMocks();
+
+            expect($thirdWithMocks.dependencies[0].dependencies[0]).toBe(
+                $firstMock,
+            );
+            expect(thirdWithMocks).toBe("firstMocksecondthird");
+        });
     });
 
-    it("should cache for a time", async () => {
-        const $i = provide("i").by(() => "i");
-        await $i("key", 1000);
-        const timer = $i.inspect().cache.get("key")?.disposeTimer;
+    describe("cloning and isolation", () => {
+        it("should clone and keep references", () => {
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second")
+                .use($first)
+                .by(() => "second");
 
-        expect(timer).not.toBe(undefined);
+            const $clonedSecond = $second.clone();
+
+            expect($clonedSecond).not.toBe($second);
+            expect($clonedSecond.dependencies[0]).toBe($first);
+        });
+
+        it("should isolate into functionally similar graph", async () => {
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second")
+                .use($first)
+                .by((deps) => deps.first + "second");
+            const $third = provide("third")
+                .use($second)
+                .by((deps) => deps.second + "third");
+
+            const $isolatedThird = $third.isolate();
+            const third = await $isolatedThird();
+
+            expect($isolatedThird).not.toBe($third);
+            expect($isolatedThird.dependencies[0]).not.toBe($second);
+            expect($isolatedThird.dependencies[0].dependencies[0]).not.toBe(
+                $first,
+            );
+            expect(third).toBe("firstsecondthird");
+        });
     });
 
-    it("should set a default cache mode (singleton)", async () => {
-        const testFor = async (defaultKey?: string) => {
-            const $i = provide("i")
-                .by(() => "i")
-                .once(defaultKey);
-            await $i();
-            const cache = $i.inspect().cache;
-            const entry = cache.get(defaultKey || "singleton");
+    describe("lifecycle", () => {
+        it("should register listeners", () => {
+            const $first = provide("first").by(() => "first");
 
-            expect(entry).not.toBe(undefined);
-        };
+            const startListener = () => {};
+            const stopListener = () => {};
 
-        testFor();
-        testFor("custom");
+            $first.lifecycle.onStart(startListener);
+            $first.lifecycle.onStop(stopListener);
+
+            expect($first.lifecycle.startEventListeners).toStrictEqual([
+                startListener,
+            ]);
+            expect($first.lifecycle.stopEventListeners).toStrictEqual([
+                stopListener,
+            ]);
+        });
+
+        it("should register listeners inside a resolver", async () => {
+            const startListener = () => {};
+            const stopListener = () => {};
+
+            const $first = provide("first").by((_, lc) => {
+                lc.onStart(startListener);
+                lc.onStop(stopListener);
+
+                return "first";
+            });
+
+            await $first();
+
+            expect($first.lifecycle.startEventListeners).toStrictEqual([
+                startListener,
+            ]);
+            expect($first.lifecycle.stopEventListeners).toStrictEqual([
+                stopListener,
+            ]);
+        });
+
+        it("should fire events and call listeners", async () => {
+            const $first = provide("first").by(() => "first");
+
+            const startListener = vi.fn(() => {});
+            const stopListener = vi.fn(() => {});
+
+            $first.lifecycle.onStart(startListener);
+            $first.lifecycle.onStop(stopListener);
+
+            await $first.lifecycle.start();
+            await $first.lifecycle.stop();
+
+            expect(startListener).toBeCalledTimes(1);
+            expect(stopListener).toBeCalledTimes(1);
+        });
     });
 
-    it("should dispose", async () => {
-        const $i = provide("i").by(() => "i");
+    describe("onEach", () => {
+        it("should register and call instance callback on each resolution", async () => {
+            const instanceCallback = vi.fn();
 
-        await $i("1");
-        await $i("2");
-        await $i.dispose();
+            const $first = provide("first").by(() => "first");
 
-        expect($i.inspect().cache.all().length).toBe(0);
-    });
+            $first.onEach(instanceCallback);
 
-    it("should clone", async () => {
-        const $a = provide("a").by(() => "a");
-        const $b = $a.clone();
+            await $first();
 
-        expect($b).not.toBe(undefined);
-        expect($b).not.toBe($a);
-    });
-
-    it("should mount", async () => {
-        const $i = provide("i").by(() => "i");
-        const instance = "mounted";
-        await $i.mount(instance, "key");
-
-        expect(await $i("key")).toBe(instance);
-    });
-
-    it("should mount and dispose existing", async () => {
-        const $i = provide("i").by(() => "i");
-
-        await $i("key");
-        await $i.mount("mounted", "key");
-
-        expect(await $i("key")).toBe("mounted");
-    });
-
-    it("should complete the dependencies", async () => {
-        const $a = provide("a").by(() => "a");
-        const $b = provide("b")
-            .using($a)
-            .by((d) => d.a + "b");
-
-        const instance = await $b.complete({ a: "test" });
-
-        expect(instance).toBe("testb");
-    });
-
-    it("should complete and cache", async () => {
-        const $a = provide("a").by(() => "a");
-        const $b = provide("b")
-            .using($a)
-            .by((d) => d.a + "b");
-
-        const instance = await $b.complete({ a: "test" }, "key");
-
-        expect(instance).toBe("testb");
-        expect(await $b("key")).toBe(instance);
-    });
-
-    it("should complete, cache and dispose previously cached instance", async () => {
-        const $a = provide("a").by(() => "a");
-        const $b = provide("b")
-            .using($a)
-            .by((d) => d.a + "b");
-
-        await $b("key");
-        const instance = await $b.complete({ a: "test" }, "key");
-
-        expect(instance).toBe("testb");
-        expect(await $b("key")).toBe(instance);
-    });
-
-    it("should set default ttl", async () => {
-        const $i = provide("i")
-            .by(() => "i")
-            .temporary(1000);
-
-        await $i("key");
-
-        const timer = $i.inspect().cache.get("key")?.disposeTimer;
-        expect(timer).not.toBe(undefined);
-    });
-
-    it("should set default ttl with cache key", async () => {
-        const $i = provide("i")
-            .by(() => "i")
-            .temporary(1000);
-
-        await $i("key1", 2000);
-        const timer1 = $i.inspect().cache.get("key1")?.disposeTimer;
-        expect(timer1).not.toBe(undefined);
-        await $i("key2");
-        const timer2 = $i.inspect().cache.get("key2")?.disposeTimer;
-        expect(timer2).not.toBe(undefined);
-    });
-
-    it("should isolate", async () => {
-        const $a = provide("a").by(() => "a");
-        const $b = provide("b")
-            .by(() => "b")
-            .using($a);
-        const $c = provide("c")
-            .by(() => "c")
-            .using($b);
-
-        const $iso = $c.isolate();
-
-        expect($iso).not.toBe(undefined);
-        expect($iso).not.toBe($c);
-        expect($iso.dependencies[0]).not.toBe($b);
-        expect($iso.dependencies[0].dependencies[0]).not.toBe($a);
-    });
-
-    it("should mock", async () => {
-        const $a = provide("a").by(() => "a");
-        const $b = provide("b")
-            .using($a)
-            .by((d) => d.a + "b");
-        const $c = provide("c")
-            .using($b)
-            .by((d) => d.b + "c");
-
-        const $mocked = $c.mock(provide("a").by(() => "mockedA"));
-
-        const result = await $mocked();
-
-        expect(result).toBe("mockedAbc");
-    });
-
-    it("should call start hook", async () => {
-        const startHook = vi.fn();
-        const $i = provide("i")
-            .by(() => "i")
-            .onStart(startHook);
-
-        await $i.start();
-
-        expect(startHook).toHaveBeenCalledTimes(1);
-    });
-
-    it("should call stop hook", async () => {
-        const stopHook = vi.fn();
-        const $i = provide("i")
-            .by(() => "i")
-            .onStop(stopHook);
-
-        await $i();
-        await $i.stop();
-
-        expect(stopHook).toHaveBeenCalledTimes(1);
-    });
-
-    it("should call stop hook with dispose", async () => {
-        const stopHook = vi.fn();
-        const $i = provide("i")
-            .by(() => "i")
-            .onStop(stopHook);
-
-        await $i();
-        await $i.stop(true);
-
-        expect(stopHook).toHaveBeenCalledTimes(1);
+            expect(instanceCallback).toBeCalledTimes(1);
+        });
     });
 });
 
-describe("many providers", () => {
-    describe("groups", () => {
-        it("should create", () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b").by(() => "b");
-            const $all = group($a, $b);
+describe("provider group", () => {
+    describe("creation", () => {
+        it("should create and interprete", () => {
+            const $first = provide("first");
+            const $second = provide("second");
+            const $third = provide("third");
+            const $all = select($first, $second, $third);
 
             expect($all).not.toBe(undefined);
-            expect($all.list).toStrictEqual([$a, $b]);
+            expect($all.list).toStrictEqual([$first, $second, $third]);
             expect($all.map).toStrictEqual({
-                a: $a,
-                b: $b,
+                first: $first,
+                second: $second,
+                third: $third,
             });
-        });
-
-        it("should add a provider", () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b").by(() => "b");
-            const $c = provide("c").by(() => "c");
-            const $all = group($a, $b).add($c);
-
-            expect($all.list).toStrictEqual([$a, $b, $c]);
-            expect($all.map).toStrictEqual({
-                a: $a,
-                b: $b,
-                c: $c,
-            });
-        });
-
-        it("should concat", () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b").by(() => "b");
-            const $c = provide("c").by(() => "c");
-            const $d = provide("d").by(() => "d");
-            const $ab = group($a, $b);
-            const $cd = group($c, $d);
-            const $all = $ab.concat($cd);
-
-            expect($all.list).toStrictEqual([$a, $b, $c, $d]);
-            expect($all.map).toStrictEqual({
-                a: $a,
-                b: $b,
-                c: $c,
-                d: $d,
-            });
-        });
-
-        it("should ignore recurring providers on add/concat", () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b").by(() => "b");
-            const $all = group($a, $b).add($b).concat(group($b));
-
-            expect($all.list).toStrictEqual([$a, $b]);
-        });
-
-        it("should build", async () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b").by(() => "b");
-
-            const all = await group($a, $b)();
-
-            expect(all).toStrictEqual({
-                a: "a",
-                b: "b",
-            });
-        });
-
-        it("should build and cache for a group", async () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b").by(() => "b");
-
-            const all = await group($a, $b)("key");
-            const all2 = await group($a, $b)("key");
-
-            expect(all).toStrictEqual(all2);
-            expect(all).toStrictEqual({
-                a: "a",
-                b: "b",
-            });
-        });
-
-        it("should build and cache for a group with ttl", async () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b").by(() => "b");
-
-            await group($a, $b)("key", 1000);
-            const timer = $a.inspect().cache.get("key")?.disposeTimer;
-            const timer2 = $b.inspect().cache.get("key")?.disposeTimer;
-
-            expect(timer).not.toBe(undefined);
-            expect(timer2).not.toBe(undefined);
-        });
-
-        it("should dispose", async () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b").by(() => "b");
-
-            const $all = group($a, $b);
-            await $all("key");
-            await $all.dispose();
-
-            expect($a.inspect().cache.get("key")).toBe(undefined);
-            expect($b.inspect().cache.get("key")).toBe(undefined);
-        });
-
-        it("should isolate", async () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b")
-                .using($a)
-                .by(() => "b");
-            const $c = provide("c")
-                .using($a)
-                .by(() => "c");
-
-            const $iso = group($a, $b, $c).isolate();
-
-            expect($iso.map.a).not.toBe($a);
-            expect($iso.map.b).not.toBe($b);
-            expect($iso.map.c).not.toBe($c);
-            expect($iso.map.b.dependencies[0]).toBe($iso.map.a);
-            expect($iso.map.c.dependencies[0]).toBe($iso.map.a);
-        });
-
-        it("should mock", async () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b").by(() => "b");
-            const $c = provide("c")
-                .using($a, $b)
-                .by((d) => d.a + d.b);
-
-            const $mocked = group($a, $b, $c).mock(
-                provide("a").by(() => "mockedA"),
-            );
-
-            const result = await $mocked();
-
-            expect(result).toStrictEqual({
-                a: "mockedA",
-                b: "b",
-                c: "mockedAb",
-            });
-        });
-
-        it("should call start hooks", async () => {
-            const startHookA = vi.fn();
-            const startHookB = vi.fn();
-            const $a = provide("a")
-                .by(() => "a")
-                .onStart(startHookA);
-            const $b = provide("b")
-                .by(() => "b")
-                .onStart(startHookB);
-
-            const $all = group($a, $b);
-            $all.onStart(startHookA);
-            $all.onStart(startHookB);
-            await $all.start();
-
-            expect(startHookA).toHaveBeenCalledTimes(3);
-            expect(startHookB).toHaveBeenCalledTimes(3);
-        });
-
-        it("should call stop hooks", async () => {
-            const stopHookA = vi.fn();
-            const stopHookB = vi.fn();
-            const $a = provide("a")
-                .by(() => "a")
-                .onStop(stopHookA);
-            const $b = provide("b")
-                .by(() => "b")
-                .onStop(stopHookB);
-
-            const $all = group($a, $b);
-            $all.onStop(stopHookA);
-            $all.onStop(stopHookB);
-
-            await $all();
-            await $all.stop();
-
-            expect(stopHookA).toHaveBeenCalledTimes(3);
-            expect(stopHookB).toHaveBeenCalledTimes(3);
-        });
-
-        it("should call stop hooks with dispose", async () => {
-            const stopHookA = vi.fn();
-            const stopHookB = vi.fn();
-            const $a = provide("a")
-                .by(() => "a")
-                .onStop(stopHookA);
-            const $b = provide("b")
-                .by(() => "b")
-                .onStop(stopHookB);
-
-            const $all = group($a, $b);
-            $all.onStop(stopHookA);
-            $all.onStop(stopHookB);
-
-            await $all();
-            await $all.stop(true);
-
-            expect(stopHookA).toHaveBeenCalledTimes(3);
-            expect(stopHookB).toHaveBeenCalledTimes(3);
         });
     });
 
-    describe("dependency graph", () => {
-        it("should construct and build a basic dependency graph", async () => {
-            const $a = provide("a").by(() => "a");
-            const $b = provide("b")
-                .using($a)
-                .by((d) => d.a + "b");
-            const $c = provide("c")
-                .using($b)
-                .by((d) => d.b + "c");
-            const $d = provide("d")
-                .using($b)
-                .by((d) => d.b + "d");
+    describe("resolution", () => {
+        it("should build", async () => {
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second").by(() => "second");
 
-            const all = await group($a, $b, $c, $d)();
+            const $all = select($first, $second);
+            const all = await $all();
 
             expect(all).toStrictEqual({
-                a: "a",
-                b: "ab",
-                c: "abc",
-                d: "abd",
+                first: "first",
+                second: "second",
             });
+        });
+
+        it("should build and cache", async () => {
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second").by(() => "second");
+
+            const $all = select($first, $second);
+            const all = await $all("key");
+
+            expect(all).toStrictEqual({
+                first: "first",
+                second: "second",
+            });
+            expect(await $first.cache.get("key")?.resolution).toBe("first");
+            expect(await $second.cache.get("key")?.resolution).toBe("second");
+        });
+    });
+
+    describe("mocking", () => {
+        it("should mock providers in the list", async () => {
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second")
+                .use($first)
+                .by((deps) => deps.first + "second");
+            const $third = provide("third")
+                .use($first)
+                .by((deps) => deps.first + "third");
+
+            const $all = select($first, $second, $third);
+
+            const $secondMock = $second.by((deps) => deps.first + "secondMock");
+            const $thirdMock = $third.by((deps) => deps.first + "thirdMock");
+
+            const $allWithMocks = $all.mock($secondMock, $thirdMock);
+            const allWithMocks = await $allWithMocks();
+
+            expect($allWithMocks.map.first).toBe($first);
+            expect($allWithMocks.map.second).toBe($secondMock);
+            expect($allWithMocks.map.third).toBe($thirdMock);
+            expect(allWithMocks).toStrictEqual({
+                first: "first",
+                second: "firstsecondMock",
+                third: "firstthirdMock",
+            });
+        });
+
+        it("should mock transitive dependencies", async () => {
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second")
+                .use($first)
+                .by((deps) => deps.first + "second");
+            const $third = provide("third")
+                .use($first)
+                .by((deps) => deps.first + "third");
+
+            const $all = select($first, $second, $third);
+
+            const $firstMock = $first.by(() => "firstMock");
+
+            const $allWithMock = $all.mock($firstMock);
+            const allWithMock = await $allWithMock();
+
+            expect($allWithMock.map.first).toBe($firstMock);
+            expect(allWithMock).toStrictEqual({
+                first: "firstMock",
+                second: "firstMocksecond",
+                third: "firstMockthird",
+            });
+        });
+    });
+
+    describe("isolation", () => {
+        it("should isolate", () => {
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second")
+                .use($first)
+                .by((deps) => deps.first + "second");
+            const $third = provide("third")
+                .use($first)
+                .by((deps) => deps.first + "third");
+
+            const $all = select($first, $second, $third);
+            const $allIsolated = $all.isolate();
+
+            expect($allIsolated.map.first).not.toBe($first);
+            expect($allIsolated.map.second).not.toBe($second);
+            expect($allIsolated.map.third).not.toBe($third);
+            expect($allIsolated.map.second.dependencies[0]).toBe(
+                $allIsolated.map.first,
+            );
+            expect($allIsolated.map.third.dependencies[0]).toBe(
+                $allIsolated.map.first,
+            );
+        });
+    });
+
+    describe("lifecycle", () => {
+        it("should call own listeners only on build", async () => {
+            const groupStartListener = vi.fn(() => {});
+
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second").by(() => "second");
+            const $all = select($first, $second);
+
+            $all.lifecycle.onStart(groupStartListener);
+
+            await $all.lifecycle.start();
+
+            expect(groupStartListener).toBeCalledTimes(1);
+        });
+
+        it("should propagate event on providers", async () => {
+            const firstStartListener = vi.fn(() => {});
+            const secondStartListener = vi.fn(() => {});
+            const groupStartListener = vi.fn(() => {});
+            const firstStopListener = vi.fn(() => {});
+            const secondStopListener = vi.fn(() => {});
+            const groupStopListener = vi.fn(() => {});
+
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second").by(() => "second");
+            const $all = select($first, $second);
+
+            $first.lifecycle.onStart(firstStartListener);
+            $second.lifecycle.onStart(secondStartListener);
+            $all.lifecycle.onStart(groupStartListener);
+            $first.lifecycle.onStop(firstStopListener);
+            $second.lifecycle.onStop(secondStopListener);
+            $all.lifecycle.onStop(groupStopListener);
+
+            await $all.lifecycle.start();
+            await $all.lifecycle.stop();
+
+            expect(groupStartListener).toBeCalledTimes(1);
+            expect(firstStartListener).toBeCalledTimes(1);
+            expect(secondStartListener).toBeCalledTimes(1);
+            expect(groupStopListener).toBeCalledTimes(1);
+            expect(firstStopListener).toBeCalledTimes(1);
+            expect(secondStopListener).toBeCalledTimes(1);
+        });
+    });
+
+    describe("onEach", () => {
+        it("should register and call instance callback on each build", async () => {
+            const instanceMapCallback = vi.fn();
+
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second").by(() => "second");
+            const $all = select($first, $second);
+
+            $all.onEach(instanceMapCallback);
+            await $all();
+
+            expect(instanceMapCallback).toBeCalledTimes(1);
+        });
+    });
+
+    describe("disposeEachCache", () => {
+        it("should dispose cache of each provider", async () => {
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second").by(() => "second");
+            const $all = select($first, $second);
+
+            await $all("key");
+            $all.disposeEachCache();
+
+            expect($first.cache.all().length).toBe(0);
+            expect($second.cache.all().length).toBe(0);
+        });
+    });
+});
+
+describe("provider scope", () => {
+    describe("creation", () => {
+        it("should create", () => {
+            const $all = scope();
+
+            expect($all).not.toBe(undefined);
+        });
+
+        it("should create with predefined providers", () => {
+            const $all = scope(provide("first"), provide("second"));
+
+            expect($all).not.toBe(undefined);
+        });
+
+        it("should create and add providers", () => {
+            const $all = scope();
+
+            const $first = $all.add(provide("first"));
+            const $second = $all.add(provide("second"));
+
+            expect($first).not.toBe(undefined);
+            expect($second).not.toBe(undefined);
+            expect($all.providers).toStrictEqual([$first, $second]);
+        });
+
+        it("should create and add multiple providers at once", () => {
+            const $all = scope();
+
+            const $firstAndSecond = $all.add(
+                provide("first"),
+                provide("second"),
+            );
+
+            expect($firstAndSecond).not.toBe(undefined);
+            expect($all.providers).toStrictEqual([
+                $firstAndSecond.list[0],
+                $firstAndSecond.list[1],
+            ]);
+        });
+    });
+
+    describe("lifecycle", () => {
+        it("should call own listeners only on build", async () => {
+            const groupStartListener = vi.fn(() => {});
+
+            const $all = scope();
+            $all.add(provide("first").by(() => "first"));
+            $all.add(provide("second").by(() => "second"));
+
+            $all.lifecycle.onStart(groupStartListener);
+
+            await $all.lifecycle.start();
+
+            expect(groupStartListener).toBeCalledTimes(1);
+        });
+
+        it("should propagate event on providers", async () => {
+            const firstStartListener = vi.fn(() => {});
+            const secondStartListener = vi.fn(() => {});
+            const groupStartListener = vi.fn(() => {});
+
+            const firstStopListener = vi.fn(() => {});
+            const secondStopListener = vi.fn(() => {});
+            const groupStopListener = vi.fn(() => {});
+
+            const $all = scope();
+            const $first = $all.add(provide("first").by(() => "first"));
+            const $second = $all.add(provide("second").by(() => "second"));
+
+            $first.lifecycle.onStart(firstStartListener);
+            $second.lifecycle.onStart(secondStartListener);
+            $all.lifecycle.onStart(groupStartListener);
+
+            $first.lifecycle.onStop(firstStopListener);
+            $second.lifecycle.onStop(secondStopListener);
+            $all.lifecycle.onStop(groupStopListener);
+
+            await $all.lifecycle.start();
+            await $all.lifecycle.stop();
+
+            expect(groupStartListener).toBeCalledTimes(1);
+            expect(firstStartListener).toBeCalledTimes(1);
+            expect(secondStartListener).toBeCalledTimes(1);
+
+            expect(groupStopListener).toBeCalledTimes(1);
+            expect(firstStopListener).toBeCalledTimes(1);
+            expect(secondStopListener).toBeCalledTimes(1);
+        });
+    });
+
+    describe("disposeEachCache", () => {
+        it("should dispose cache of each provider", async () => {
+            const $first = provide("first").by(() => "first");
+            const $second = provide("second").by(() => "second");
+            const $all = scope($first, $second);
+
+            await $first("key");
+            await $second("key");
+            $all.disposeEachCache();
+
+            expect($first.cache.all().length).toBe(0);
+            expect($second.cache.all().length).toBe(0);
         });
     });
 });
