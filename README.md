@@ -371,7 +371,7 @@ $isolatedService.dependencies[0] !== $otherService;
 
 ### Resolution interception
 
-The provider allows you to register functions that will be called whenever a new permission is granted with an instance of that permission:
+The provider allows you to register functions that will be called on each resolution with an instance of that resolution:
 
 ```ts
 $service.onEach((service) =>
