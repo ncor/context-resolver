@@ -73,7 +73,6 @@ const main = () => {
     const cookieJar = new CookieJar({
         databaseClient: databaseClient,
     });
-    // Now we have an instance of CookieRepository!
 };
 ```
 
