@@ -225,8 +225,8 @@ const $databaseClient = provide("databaseClient")
 Now, every time we resolve this provider, we will get back the same instance, unless we specify a custom key that is different from the default:
 
 ```ts
-(await $databaseClient()) === (await $databaseClient());
-(await $databaseClient()) !== (await $databaseClient("different"));
+await $databaseClient() === await $databaseClient();
+await $databaseClient() !== await $databaseClient("different");
 ```
 
 ### Caching
@@ -242,9 +242,9 @@ const $service = provide("service").by(createService);
 ```
 
 ```ts
-(await $service()) !== (await $service());
-(await $service("key")) === (await $service("key"));
-(await $service("key")) !== (await $service("different"));
+await $service() !== await $service();
+await $service("key") === await $service("key");
+await $service("key") !== await $service("different");
 ```
 
 We can specify a default caching key using the [singleton](#singleton) method, which was already used in the topic about [singletons](#Singletons). When a default caching key is set, every new resolve call that does not explicitly specify a caching key will use this default key. If a resolve call is passed a key that differs from the default, this key will be used for caching, ignoring the default:
@@ -254,9 +254,9 @@ const $service = provide("service").by(createService).singleton("key");
 ```
 
 ```ts
-(await $service()) === (await $service());
-(await $service()) === (await $service("key"));
-(await $service()) !== (await $service("different"));
+await $service() === await $service();
+await $service() === await $service("key");
+await $service() !== await $service("different");
 ```
 
 To clear the entire cache or remove a single resolution from it we can use [dispose](#dispose) method provided by the cache interface.
