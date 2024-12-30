@@ -22,7 +22,7 @@ deno add context-resolver   # deno
 
 ## Why you shouldn't use this library
 
-This library was created to scale typed asynchronous code bases that use interfaces and functions rather than classes. Therefore, I do not recommend using this library in projects where:
+This library was created to scale typed asynchronous codebases that use interfaces and functions rather than classes. Therefore, I do not recommend using this library in projects where:
 
 -   OOP and classes are the main approach;
 -   The amount of code is small enough to build the application manually;
