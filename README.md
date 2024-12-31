@@ -1,6 +1,16 @@
 # context-resolver
 
-A type-safe, async-first context resolution library for IoC/DI and lifecycle management.
+A type-safe, async-first library for IoC/DI.
+
+## Why you shouldn't use this library
+
+This library was created to scale typed asynchronous codebases that use interfaces and functions rather than classes. Therefore, I do not recommend using this library in projects where:
+
+-   OOP and classes are the main approach;
+-   The amount of code is small enough to build the application manually;
+-   TypeScript is not used.
+
+For cases that do not fit the purpose of this library, I recommend the following solutions: [Awilix](https://github.com/jeffijoe/awilix), [Nest](https://github.com/nestjs/nest), [TSyringe](https://github.com/microsoft/tsyringe).
 
 # Installation
 
@@ -18,104 +28,6 @@ bun add context-resolver    # bun
 deno add context-resolver   # deno
 ```
 
-# Before you start
-
-## Why you shouldn't use this library
-
-This library was created to scale typed asynchronous codebases that use interfaces and functions rather than classes. Therefore, I do not recommend using this library in projects where:
-
--   OOP and classes are the main approach;
--   The amount of code is small enough to build the application manually;
--   TypeScript is not used.
-
-For cases that do not fit the purpose of this library, I recommend the following solutions: [Awilix](https://github.com/jeffijoe/awilix), [Nest](https://github.com/nestjs/nest), [TSyringe](https://github.com/microsoft/tsyringe).
-
-## Some theory
-
-Let's say you already have constructors or functions that create instances of classes or structures. To maintain encapsulation and low coupling, the created entities do not communicate with each other in the global scope, they are created with their own instances of their dependencies that were passed to the constructor. This approach is called inversion of control, and the mechanism for passing dependencies to the constructor is dependency injection.
-
-Let's look at an example of this approach with classes:
-
-```ts
-interface Config {
-    connectionUrl: string;
-}
-
-interface IDatabaseClient {}
-
-interface Repository<Entity> {}
-```
-
-```ts
-class DatabaseClient implements IDatabaseClient {
-    constructor(dependencies: { connectionUrl: string }) {
-        this.connectionUrl = dependencies.connectionUrl;
-    }
-}
-
-class CookieJar implements Repository<Cookie> {
-    constructor(dependencies: { databaseClient: IDatabaseClient }) {
-        this.databaseClient = dependencies.databaseClient;
-    }
-}
-```
-
-```ts
-const main = () => {
-    const config: Config = {
-        connectionUrl: "...",
-    };
-
-    const databaseClient = new DatabaseClient({
-        connectionUrl: config.connectionUrl,
-    });
-
-    const cookieJar = new CookieJar({
-        databaseClient: databaseClient,
-    });
-};
-```
-
-And with functions:
-
-```ts
-interface Config {
-    connectionUrl: string;
-}
-
-interface DatabaseClient {}
-
-interface Repository<Entity> {}
-```
-
-```ts
-const createDatabaseClient = (dependencies: {
-    connectionUrl: string;
-}): DatabaseClient => {};
-
-const createCookieJar = (dependencies: {
-    databaseClient: DatabaseClient;
-}): CookieJar => {};
-```
-
-```ts
-const main = () => {
-    const config: Config = {
-        connectionUrl: "...",
-    };
-
-    const databaseClient = createDatabaseClient({
-        connectionUrl: config.connectionUrl,
-    });
-
-    const cookieJar = createCookieJar({
-        databaseClient: databaseClient,
-    });
-};
-```
-
-We encapsulated modules and defined their dependencies using interfaces. We injected dependencies manually, imperatively, creating entity after entity and passing each to the constructor partially or completely. In general, this approach works and works well, but what if we have dozens or even hundreds of modules, and the dependencies between them are many times greater? For such cases we need automation, a tool that will allow us to create instances for us.
-
 # Get started
 
 #### Table of contents
@@ -125,15 +37,11 @@ We encapsulated modules and defined their dependencies using interfaces. We inje
     -   [Dependent providers](#Dependent-providers)
     -   [Resolution](#Resolution)
     -   [Partial resolution](#Partial-resolution)
-    -   [Singletons](#Singletons)
-    -   [Caching](#Caching)
-    -   [Lifecycle](#Lifecycle)
+    -   [Singleton and transient](#Singleton-and-transient)
     -   [Mocking](#Mocking)
     -   [Cloning and isolation](#Cloning-and-isolation)
     -   [Resolution interception](#Resolution-interception)
 -   [Selections](#Selections)
-    -   Not written yet.
--   [Scopes](#Scopes)
     -   Not written yet.
 
 ## Providers
@@ -208,106 +116,37 @@ const car = await $car.complete({
 
 -   [complete](#complete) is a provider method that takes a portion of a dependency container and resolves an instance by resolving the remaining dependencies.
 
-### Singletons
+### Singleton and transient
 
-Often it is necessary to create only one instance of an entity, which will be passed to all resolutions of entities that depend on it. This pattern is called a singleton, and the library implements it using caching. Let's look at an example of using a special method that turns a provider into a singleton provider:
-
-```ts
-const $databaseClient = provide("databaseClient")
-    .use($config)
-    .by(({ config }) => createDatabaseClient(config.connectionUrl))
-    .singleton("main");
-```
-
--   [singleton](#singleton) is a provider method that accepts an optional cache key and creates a new provider with a default cache key of that value or `"_singleton"`.
-
-Now, every time we resolve this provider, we will get back the same instance, unless we specify a custom key that is different from the default:
+All providers are singletons by default, meaning they are instantiated only once and returned on every resolution:
 
 ```ts
-await $databaseClient() === await $databaseClient();
-await $databaseClient() !== await $databaseClient("different");
-```
-
-### Caching
-
-In the topic about [singletons](#Singletons) we touched on caching, here we will understand how it works and how to use it.
-
-[Resolution cache](#Resolution-cache-ResolutionCache) is an interface to the instance resolution map, which is created [in each provider](#cache).
-
-It can be used when resolving a new instance by passing a cache key to the call. If there is no cached instance under that key, a new instance will be created and cached under that key. If there is already an instance cached under that key, it will be returned and no new instance will be created:
-
-```ts
-const $service = provide("service").by(createService);
+const $singleton = provide("singleton").by(createSingleton);
 ```
 
 ```ts
-await $service() !== await $service();
-await $service("key") === await $service("key");
-await $service("key") !== await $service("different");
+(await $singleton()) === $singleton();
 ```
 
-We can specify a default caching key using the [singleton](#singleton) method, which was already used in the topic about [singletons](#Singletons). When a default caching key is set, every new resolve call that does not explicitly specify a caching key will use this default key. If a resolve call is passed a key that differs from the default, this key will be used for caching, ignoring the default:
+In addition to singletons, providers also gives the ability to change its mode to transitive, which will force a new provider to create a new instance on each resolution. This feature is very often used when it is necessary to have separate state for each resolution.
 
 ```ts
-const $service = provide("service").by(createService).singleton("key");
+const $transient = provide("transient").by(createTransient).transient();
 ```
 
 ```ts
-await $service() === await $service();
-await $service() === await $service("key");
-await $service() !== await $service("different");
+(await $transient()) !== $transient();
 ```
 
-To clear the entire cache or remove a single resolution from it we can use [dispose](#dispose) method provided by the cache interface.
+-   [transient](#transient) is a provider method that creates a new provider with `isTransient` set to `true`, which forces a provider to create new instance on each resolution.
+
+A provider can also be converted back to a singleton:
 
 ```ts
-$service.cache.dispose("key"); // removes one under the "key"
+const $serviceButSingleton = $service.singleton();
 ```
 
-```ts
-$service.cache.dispose(); // removes all
-```
-
-For more advanced work with caches, I recommend to read [this part of a reference](#Resolution-cache-ResolutionCache).
-
-### Lifecycle
-
-The provider and their set structures have a [lifecycle](#Lifecycle-event-broker-Lifecycle). It is a broker of start and stop events, which allows publishing these events and subscribing to them. This feature helps to conveniently run the code on startup and termination, for example for example, connecting to and disconnecting from database.
-
-```ts
-const $databaseClient = provide("databaseClient")
-    .use($config)
-    .by(({ config }, lc) => {
-        const client = createDatabaseClient(config.connectionUrl);
-
-        lc.onStart(() => client.connect());
-        lc.onStop(() => client.disconnect());
-
-        return client;
-    })
-    .singleton("main");
-```
-
-```ts
-const databaseClient = await $databaseClient();
-
-await databaseClient.lifecycle.start(); // runs client.connect()
-// ...
-await databaseClient.lifecycle.stop(); // runs client.disconnect()
-```
-
--   `lc` is an argument with a [provider lifecycle](#lifecycle) instance that is passed to the resolver on each resolution and is needed to hook in the resolution context.
--   [onStart](#onStart) and [onStop](#onStop) are methods that register the start and stop event callbacks respectively. The function passed to these methods will be run immediately after the event is published.
--   [start](#start) and [stop](#stop) are methods that publish a start and stop event, respectively. They return a promise that will be resolved once all registered callbacks have been executed.
-
-We can also subscribe to events outside the resolver.
-
-```ts
-databaseClient.lifecycle.onStart(...)
-databaseClient.lifecycle.onStop(...)
-```
-
-For more advanced work with lifecycles, I recommend to read [this part of a reference](#Lifecycle-event-broker-Lifecycle).
+-   [singleton](#singleton) is a provider method that creates a new provider with `isTransient` set to `false` which forces the provider to create an instance only once and return it on every resolution.
 
 ### Mocking
 
@@ -371,7 +210,7 @@ $isolatedService.dependencies[0] !== $otherService;
 
 ### Resolution interception
 
-The provider allows you to register functions that will be called on each resolution with an instance of that resolution:
+The provider allows you to register functions that will be called whenever a new permission is granted with an instance of that permission:
 
 ```ts
 $service.onEach((service) =>
@@ -387,20 +226,13 @@ Why? In fact, there was only one reason - to hook events outside the resolver.
 
 Not written yet.
 
-## Scopes
-
-Not written yet.
-
 # Reference
 
 #### Table of contents
 
 -   [Functions](#Functions)
 -   [Provider](#Provider-Provider)
--   [Resolution cache](#Resolution-cache-ResolutionCache)
--   [Lifecycle event broker](#Lifecycle-event-broker-Lifecycle)
 -   [Selection](#Selection-ProviderSelection)
--   [Scope](#Scope-ProviderScope)
 
 ## Functions
 
@@ -412,7 +244,7 @@ Not written yet.
 -   `opts?`: Configuration:
     -   `dependencies?`: A list of dependency providers.
     -   `resolver?`: A function that creates an instance.
-    -   `defaultCacheKey?`: A default cache key. When this string is set, a first instance will be stored under that key, and all future resolutions will return that entity unless a different key is intentionally specified.
+    -   `isTransient?`: If `true`, each new resolution will create a new instance, otherwise the instance will be created once and will be returned on each resolution. Default is `false`.
 
 #### Description
 
@@ -424,7 +256,7 @@ Creates a [provider](#Provider-Provider), a structure that creates instances by 
 const $service = createProvider("service", {
     dependencies: [$otherService],
     resolver: createService,
-    defaultCacheKey: "key",
+    isTransient: true,
 });
 ```
 
@@ -434,7 +266,7 @@ With `provide` and builder methods:
 const $service = provide("service")
     .use($otherService)
     .by(createService)
-    .singleton("key");
+    .singleton();
 ```
 
 ### `createSelection` / `select`
@@ -447,27 +279,11 @@ const $service = provide("service")
 
 Creates a [provider selection](#Selection-ProviderSelection), a set of providers grouped together into a common context.
 
-### `createScope` / `scope`
-
-#### Parameters
-
--   `...providers`: A list of predefined providers.
-
-#### Description
-
-Creates a provider scope, an untyped set of providers for global distribution of lifecycle events and cache disposition.
-
 ## Provider (`Provider`)
 
 Creates instances by resolving its dependencies.
 
 ### `()` (callable)
-
-#### Parameters
-
--   `cacheKey`: A key under which the instance will be cached.
-
-#### Description
 
 Resolves an instance by calling its resolver with dependencies.
 
@@ -496,13 +312,9 @@ Unique identifier.
 
 A list of dependency providers.
 
-### `.cache`
+### `.isTransient`
 
-Stores and provides resolutions. [Learn more](#Resolution-cache-ResolutionCache)
-
-### `.lifecycle`
-
-Start and stop event broker. [Learn more](#Lifecycle-event-broker-Lifecycle)
+If `true`, each new resolution will create a new instance, otherwise the instance will be created once and will be returned on each resolution. Default is `false`.
 
 ### `.as`
 
@@ -554,21 +366,28 @@ const $serviceWithDeps = $standaloneService.use($otherService);
 (await $serviceWithDeps()) === {};
 ```
 
-### `.singleton`
+### `.transient`
 
-#### Parameters
-
--   `key`: Cache key. Defaults to `"singleton"` if not specified.
-
-Creates a new provider with a modified default cache key. When a default cache key is set, a first instance will be stored under that key, and all future resolutions will return that entity unless a different key is intentionally specified.
+Creates a new provider with `isTransient` set to `true`, which forces a provider to create new instance on each resolution.
 
 #### Examples
 
 ```ts
-const $service = provide("service").by(createService).singleton("key");
+const $service = provide("service").by(createService).transient();
 
-(await provider()) === (await provider());
-(await provider()) !== (await provider("different"));
+(await $service()) !== (await $service());
+```
+
+### `.singleton`
+
+Creates a new provider with `isTransient` set to `false` which forces the provider to create an instance only once and return it on every resolution. This is the default setting.
+
+#### Examples
+
+```ts
+const $service = provide("service").by(createService).singleton();
+
+(await $service()) === (await $service());
 ```
 
 ### `.mock`
@@ -638,7 +457,6 @@ $broker.onEach((broker) => {
 #### Parameters
 
 -   `resolvedPart`: Already resolved part of dependency container.
--   `cacheKey?`: A key under which the instance will be cached.
 
 #### Description
 
@@ -661,102 +479,13 @@ const third = await $third.complete(
 )
 ```
 
-## Resolution cache (`ResolutionCache`)
-
-Stores and provides resolutions. Created for each [provider](#Provider-Provider).
-
-### `.map`
-
-Cache.
-
-### `.get`
-
-#### Parameters
-
--   `key`: A key of cached resolution.
-
-#### Description
-
-Retrieves a possibly existing resolution from the cache.
-
-### `.set`
-
-#### Parameters
-
--   `key`: Akey under which the instance will be saved.
--   `resolution`: A promise of an instance.
-
-#### Description
-
-Saves the resolution in the cache.
-
-### `.all`
-
-Retrieves all existing resolutions from the map.
-
-### `.dispose`
-
-#### Parameters
-
--   `key?`: A key of cached resolution.
-
-#### Description
-
-Removes all resolutions from the cache. Tries to remove one if key parameter is provided.
-
-## Lifecycle event broker (`Lifecycle`)
-
-Start and stop event broker. Created for each [provider](#Provider-Provider), [selection](#Selection-ProviderSelection) and [scope](#Scope-ProviderScope).
-
-### `.startEventListeners`
-
-A list of start event listeners.
-
-### `.stopEventListeners`
-
-A list of stop event listeners.
-
-### `.onStart`
-
-#### Parameters
-
--   `listener`: A function that will be called on start event.
-
-#### Description
-
-Registers a listener for each start event.
-
-### `.onStop`
-
-#### Parameters
-
--   `listener`: A function that will be called on stop event.
-
-#### Description
-
-Registers a listener for each stop event.
-
-### `.start`
-
-Fires a start event, calling all start event listeners.
-
-### `.stop`
-
-Fires a stop event, calling all stop event listeners.
-
 ## Selection (`ProviderSelection`)
 
 Set of providers grouped together into a common context.
 
 ### `()` (callable)
 
-#### Parameters
-
--   `cacheKey?`: A key under which all instances will be cached.
-
-#### Description
-
-Resolves instances of all providers from a list, producing an instance map. The passed parameters will be applied for every resolution.
+Resolves instances of all providers from a list, producing an instance map.
 
 #### Examples
 
@@ -778,10 +507,6 @@ A list of providers.
 ### `.map`
 
 A map of providers by their unique identifier.
-
-### `.lifecycle`
-
-Start and stop event broker. Each start and stop event will trigger the same event in each provider from the list. [Learn more](#Lifecycle-event-broker-Lifecycle)
 
 ### `.onEach`
 
@@ -805,14 +530,6 @@ $all.onEach((all) => {
     );
 });
 ```
-
-### `.disposeEachCache`
-
-#### Parameters
-
--   `key?`: A cached instance key.
-
-Calls `dispose` method of each provider cache in the list. [Learn more](#dispose)
 
 ### `.isolate`
 
@@ -863,38 +580,6 @@ $allWithMockedFirst.map.first === $firstMock;
 $allWithMockedFirst.map.second.dependencies[0] === $firstMock;
 $allWithMockedFirst.map.third.dependencies[0] === $firstMock;
 ```
-
-## Scope (`ProviderScope`)
-
-Untyped set of providers for global distribution of lifecycle events and cache disposition.
-
-### `.providers`
-
-A list of registered providers.
-
-### `.lifecycle`
-
-Start and stop event broker. Each start and stop event will trigger the same event in each provider in the scope. [Learn more](#Lifecycle-event-broker-Lifecycle)
-
-### `.add`
-
-#### Parameters
-
--   `...providers`: A list of providers to add.
-
-#### Description
-
-Adds providers to the scope. Returns a provider if there was only one in the a list, otherwise returns a selection of providers in the list.
-
-### `.disposeEachCache`
-
-#### Parameters
-
--   `key?`: A cached instance key.
-
-#### Description
-
-Calls `dispose` method of each provider cache in the scope. [Learn more](#dispose)
 
 # Contribution
 
